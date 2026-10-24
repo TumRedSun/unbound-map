@@ -1,0 +1,60 @@
+// Unbound Maps - original open-source minimap and world map mod for NeoForge.
+// Copyright (C) 2025 Unbound
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+plugins {
+    id 'java-library'
+    id 'net.neoforged.moddev' version '2.0.148'
+}
+
+version = project.mod_version
+group = project.mod_group_id
+
+base {
+    archivesName = project.mod_id
+}
+
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(21)
+    }
+}
+
+// Ensure the source files are read and compiled with the correct encoding
+tasks.withType(JavaCompile).configureEach {
+    options.encoding = 'UTF-8'
+}
+
+neoForge {
+    // NeoForge version for Minecraft 1.21.1
+    version = project.neo_version
+
+    runs {
+        client {
+            client()
+        }
+        server {
+            server()
+            programArgument('--nogui')
+        }
+    }
+
+    mods {
+        "${project.mod_id}" {
+            sourceSet(sourceSets.main)
+        }
+    }
+}
+
+jar {
+    manifest {
+        attributes([
+            'Specification-Title'   : project.mod_id,
+            'Specification-Vendor'  : project.mod_authors,
+            'Specification-Version' : '1',
+            'Implementation-Title'  : project.mod_name,
+            'Implementation-Version': project.jar.archiveVersion.getOrElse(project.mod_version),
+            'Implementation-Vendor' : project.mod_authors
+        ])
+    }
+}
