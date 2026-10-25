@@ -956,7 +956,11 @@ public class WorldMapScreen extends Screen {
         // would never see the rest of the explored map.
         if (MapStore.isEnabled()) {
             ClientLevel level = var9;
-            MapStore.forEachStoredChunk((pos, palette, cols) -> {
+            List<WorldMapScreen.BiomeSig> sigs = this.buildBiomeSignatures(var9);
+            List<WorldMapScreen.BiomeSig> matchingSigs = sigs == null
+                ? List.of()
+                : sigs.stream().filter(s -> this.biomeIdMatches(s.id, norm, false, null)).toList();
+            MapStore.forEachStoredChunk((pos, heights, colors, palette, cols) -> {
                 if (var5.size() >= 2048) {
                     return;
                 }
@@ -985,7 +989,7 @@ public class WorldMapScreen extends Screen {
                     // Hillshade and water depth scale all channels uniformly, so the
                     // normalized color still identifies the biome tint applied at
                     // explore time. Best-effort for old data only.
-                    for (int i = 0; i < 256 && var5.size() < 512; i++) {
+                    for (int i = 0; i < 256 && var5.size() < 2048; i++) {
                         int color = colors[i];
                         if (color == MapTileCache.UNKNOWN || (color >>> 24) != 0xFF) {
                             continue;

@@ -53,7 +53,6 @@ public final class MapTileCache {
     };
     /** How much sky light each night-dim step removes (config 0..3; 0 = Xaero-like constant colors). */
     private static final float NIGHT_STEP = 0.12F;
-    private static int lastDarken = -1;
     private static int nightStrength = 0;
     /** Global look: gentle gamma lift (brighter mids) + mild saturation boost, applied to every rendered pixel. */
     private static final int[] ENHANCE_LUT = new int[256];
@@ -97,40 +96,27 @@ public final class MapTileCache {
             MinimapTexture.invalidateAll();
         }
 
-        // Dynamic day/night: only when the user opted into a night tint, surface
-        // tiles are re-baked so dusk/dawn show. With strength 0 (default) the map
-        // keeps its colors around the clock, exactly like Xaero's world map.
+        // Day/night: the dim is applied at DRAW time (see nightFactor), so tiles
+        // keep their colors around the clock and never re-bake when the sky
+        // darkens. With strength 0 (default) the map is full-bright like Xaero's.
         nightStrength = intFlag(UnboundConfig.NIGHT_DIM_STRENGTH, 0);
-        Minecraft mc = Minecraft.getInstance();
-        if (mc.level != null) {
-            int darken = mc.level.getSkyDarken();
-            if (darken != lastDarken) {
-                lastDarken = darken;
-                if (nightStrength > 0) {
-                    CHUNKS.clear();
-                    WorldMapCells.clearAll();
-                    MinimapTexture.invalidateAll();
-                }
-            }
-        }
     }
 
     /**
-     * Uniform day/night dim factor for surface map tiles, applied at draw time via
-     * RenderSystem.setShaderColor: 1.0 at day, ~0.78 at full night. Cave mode is
-     * exempt (it is lit by block light, not by the sun). The surface colors no
-     * longer depend on the time of day, so baked tiles are shared between day and
-     * night and never re-bake when the sky darkens.
+     * Uniform day/night dim factor for surface map tiles, applied at draw time
+     * (shader color / vertex tint): 1.0 by day, down to 1 - strength*0.12 by
+     * full night (strength 0 = constant Xaero-like colors, 3 = 36% darker).
+     * Cave mode is exempt: it is lit by block light, not by the sun.
      */
     public static float nightFactor() {
-        if (!nightDim || MapTileCache.cave) {
+        if (nightStrength <= 0 || MapTileCache.cave) {
             return 1.0F;
         }
         Minecraft mc = Minecraft.getInstance();
         if (mc.level == null) {
             return 1.0F;
         }
-        return 1.0F - NIGHT_DIM_STRENGTH * (float)mc.level.getSkyDarken() / 15.0F;
+        return 1.0F - Math.min(1.0F, nightStrength * NIGHT_STEP) * (float)mc.level.getSkyDarken() / 15.0F;
     }
 
     /**
@@ -140,79 +126,11 @@ public final class MapTileCache {
     private static float lightShade(ClientLevel var0, int var1, int var2) {
         float var4 = LIGHT_CURVE[var2 & 15];
         float var5 = LIGHT_CURVE[var1 & 15];
-        if (var3 && nightStrength > 0) {
+        if (nightStrength > 0) {
             var5 *= 1.0F - nightStrength * NIGHT_STEP * (float)var0.getSkyDarken() / 15.0F;
         }
 
         return Math.max(0.10F, Math.max(var4, var5));
-    }
-
-    /** Current sky darkness (0 = day, 15 = full night). */
-    private static int currentDarken() {
-        Minecraft mc = Minecraft.getInstance();
-        return mc.level != null ? mc.level.getSkyDarken() : 0;
-    }
-
-    /**
-     * Samples sky/block light per pixel WITHOUT touching the colors and returns
-     * one byte per pixel: sky<<4 | block. Stored in the persistent map, so the
-     * day/night cycle replays over every explored chunk, loaded or not.
-     */
-    private static byte[] captureLight(ClientLevel var0, int var1, int var2, MapTileCache.Entry var3) {
-        byte[] var4 = new byte[256];
-        int var5 = var0.getMinBuildHeight();
-        MutableBlockPos var6 = new MutableBlockPos();
-
-        for (int var7 = 0; var7 < 256; var7++) {
-            if (var3.colors[var7] != UNKNOWN) {
-                var6.set((var1 << 4) + (var7 & 15), Math.max(var3.heights[var7] - 1, var5), (var2 << 4) + (var7 >> 4));
-                var4[var7] = (byte)(var0.getBrightness(LightLayer.SKY, var6) << 4 | var0.getBrightness(LightLayer.BLOCK, var6));
-            } else {
-                var4[var7] = -1;
-            }
-        }
-
-        return var4;
-    }
-
-    /**
-     * Applies the day/night look to a STORED entry using the light captured when
-     * the chunk was explored. Old (v1) chunks have the daylight look baked in and
-     * no light data, so they get a uniform dim instead - still far better than
-     * staying full-bright at night.
-     */
-    private static void applyStoredLight(MapTileCache.Entry var0, int var1) {
-        float var2 = 1.0F - nightStrength * NIGHT_STEP * (float)var1 / 15.0F;
-
-        for (int var3 = 0; var3 < 256; var3++) {
-            if (var0.colors[var3] != UNKNOWN) {
-                if (var0.light != null) {
-                    int var4 = var0.light[var3] & 0xFF;
-                    if (var4 != 0xFF) {
-                        float var5 = Math.max(LIGHT_CURVE[var4 & 15], LIGHT_CURVE[var4 >> 4] * var2);
-                        var0.colors[var3] = shadeAbgr(var0.colors[var3], Math.max(0.10F, var5));
-                    }
-                } else {
-                    var0.colors[var3] = shadeAbgr(var0.colors[var3], Math.max(0.45F, var2));
-                }
-            }
-        }
-    }
-
-    /**
-     * Multiplies a freshly computed entry by the dynamic light from captured
-     * nibbles (same sampling positions as the old per-pixel applyLight).
-     */
-    private static void applyLightNibbles(MapTileCache.Entry var0, byte[] var1, boolean var2) {
-        float var3 = var2 ? 1.0F - nightStrength * NIGHT_STEP * (float)currentDarken() / 15.0F : 1.0F;
-
-        for (int var4 = 0; var4 < 256; var4++) {
-            int var5 = var1[var4] & 0xFF;
-            if (var0.colors[var4] != UNKNOWN && var5 != 0xFF) {
-                float var6 = Math.max(LIGHT_CURVE[var5 & 15], LIGHT_CURVE[var5 >> 4] * var3);
-                var0.colors[var4] = shadeAbgr(var0.colors[var4], Math.max(0.10F, var6));
-            }
-        }
     }
 
     /**

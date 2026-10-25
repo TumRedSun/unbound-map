@@ -63,18 +63,20 @@ public final class MinimapHud {
                 int var15 = MinimapTexture.anchorZ();
                 float var16 = 0.001953125F;
                 Matrix4f var17 = var0.pose().last().pose();
-                // gentle Xaero-like night dim, multiplied straight into the map
-                // vertices (cave view is exempt: it is lit by block light)
-                float var18 = MapTileCache.nightFactor();
-                int var19 = tintFor(var18);
+                // gentle night dim straight in the map vertices, driven by the same
+                // nightDimStrength the world map uses (0 = constant Xaero colors);
+                // cave view is exempt: it is lit by block light, not by the sun
+                int var18 = tintFor(MapTileCache.nightFactor());
                 RenderSystem.enableBlend();
                 RenderSystem.defaultBlendFunc();
                 if (var9) {
-                    renderSquare(var0, var17, var6, var7, var5, var8, var10, var12, var14, var15, var16, var19);
+                    renderSquare(var17, var6, var7, var5, var8, var10, var12, var14, var15, var16, var18);
                 } else {
-                    renderRound(var17, var6, var7, var5, var8, var10, var12, var14, var15, var16, var19);
+                    renderRound(var17, var6, var7, var5, var8, var10, var12, var14, var15, var16, var18);
                 }
 
+                // map texture drawn through the immediate path - flush before the
+                // batched labels so ordering and GL state stay deterministic
                 var0.flush();
                 var0.drawString(
                     var2.font,
@@ -87,46 +89,47 @@ public final class MinimapHud {
                 WaypointRenderer.drawMinimapMarkers(var0, var6, var7, var5, var8, var10, var12, var9);
                 EntityRadar.draw(var0, var6, var7, var5, var8, var10, var12, var9);
                 DrawHelper.playerArrow(var17, var6, var7, var3.getYRot());
-                boolean var18 = UnboundConfig.SHOW_COORDS.get();
-                boolean var19 = UnboundConfig.SHOW_BIOME.get();
+                var0.flush();
+                boolean var30 = UnboundConfig.SHOW_COORDS.get();
+                boolean var31 = UnboundConfig.SHOW_BIOME.get();
                 boolean var20 = MapTileCache.isCave();
-                int var21 = (var18 ? 1 : 0) + (var19 ? 1 : 0) + (var20 ? 1 : 0);
+                int var21 = (var30 ? 1 : 0) + (var31 ? 1 : 0) + (var20 ? 1 : 0);
                 if (var21 > 0) {
                     int var22 = 2 * var5 + 6;
                     int var23 = var21 * 10 + 4;
-                    int var24 = var6 - var5 - 3;
+                    int var24 = Mth.clamp(var6 - var5 - 3, 2, Math.max(2, var0.guiWidth() - var22 - 2));
                     int var25 = var7 + var5 + 7;
                     var0.fill(var24, var25, var24 + var22, var25 + var23, -1945104364);
+                    // renderOutline takes (x, y, WIDTH, HEIGHT) in 1.21.1
                     var0.renderOutline(var24, var25, var22, var23, 1711276032);
                     int var26 = var25 + 3;
                     if (var20) {
-                        String var21c = I18n.get("gui.unboundmaps.caveLabel")
+                        String var27 = I18n.get("gui.unboundmaps.caveLabel")
                             + ": "
                             + (CaveState.isAuto() ? I18n.get("gui.unboundmaps.caveAuto") : "Y=" + CaveState.fixedY());
-                        var0.drawCenteredString(var2.font, var23c, var6, var28, -1727668);
-                        var28 += 10;
+                        var0.drawCenteredString(var2.font, var27, var6, var26, -1727668);
+                        var26 += 10;
                     }
 
-                    if (var20) {
+                    if (var30) {
                         var0.drawCenteredString(
-                            var2.font, "X " + var3.getBlockX() + "  Y " + var3.getBlockY() + "  Z " + var3.getBlockZ(), var6, var28, -1643021
+                            var2.font, "X " + var3.getBlockX() + "  Y " + var3.getBlockY() + "  Z " + var3.getBlockZ(), var6, var26, -1643021
                         );
-                        var28 += 10;
+                        var26 += 10;
                     }
 
-                    if (var21) {
-                        String var29 = var4.getBiome(var3.blockPosition())
+                    if (var31) {
+                        String var28 = var4.getBiome(var3.blockPosition())
                             .unwrapKey()
                             .map(var0x -> Component.translatable(var0x.location().toLanguageKey("biome")).getString())
                             .orElse("unknown");
-                        var0.drawCenteredString(var2.font, var29, var6, var28, -4668212);
+                        var0.drawCenteredString(var2.font, var28, var6, var26, -4668212);
                     }
                 }
 
                 RenderSystem.disableBlend();
-                RenderSystem.setShaderColor(1.0F, 1.0F, 1.0F, 1.0F);
-            } catch (Exception var30) {
-                UnboundMapsDebug.note(var30);
+            } catch (Exception var29) {
+                UnboundMapsDebug.note(var29);
                 // never leave render state dirty for the rest of the frame
                 RenderSystem.setShaderColor(1.0F, 1.0F, 1.0F, 1.0F);
                 RenderSystem.disableBlend();
@@ -141,49 +144,51 @@ public final class MinimapHud {
     }
 
     private static void renderSquare(
-        GuiGraphics var0, Matrix4f var1, int var2, int var3, int var4, float var5, double var6, double var8, int var10, int var11, float var12, int var13
+        Matrix4f var0, int var1, int var2, int var3, float var4, double var5, double var6, int var8, int var9, float var10, int var11
     ) {
-        float var14 = var2 - var4;
-        float var15 = var3 - var4;
-        float var16 = var2 + var4;
-        float var17 = var3 + var4;
-        float var18 = (float)((var6 - var5 - var10) * var12);
-        float var19 = (float)((var8 - var5 - var11) * var12);
-        float var20 = (float)((var6 + var5 - var10) * var12);
-        float var21 = (float)((var8 + var5 - var11) * var12);
-        DrawHelper.texturedQuadTinted(var1, MinimapTexture.location(), var14, var15, var16, var17, var18, var19, var20, var21, var13);
+        float var12 = var1 - var3;
+        float var13 = var2 - var3;
+        float var14 = var1 + var3;
+        float var15 = var2 + var3;
+        float var16 = (float)((var5 - var4 - var8) * var10);
+        float var17 = (float)((var6 - var4 - var9) * var10);
+        float var18 = (float)((var5 + var4 - var8) * var10);
+        float var19 = (float)((var6 + var4 - var9) * var10);
+        DrawHelper.texturedQuadTinted(var0, MinimapTexture.location(), var12, var13, var14, var15, var16, var17, var18, var19, var11);
+        int var20 = Mth.floor(var12);
+        int var21 = Mth.floor(var13);
         int var22 = Mth.floor(var14);
         int var23 = Mth.floor(var15);
-        int var24 = Mth.floor(var16);
+        Minecraft var24 = Minecraft.getInstance();
+        GuiGraphics var25 = new GuiGraphics(var24, var24.renderBuffers().bufferSource());
         // renderOutline takes (x, y, WIDTH, HEIGHT) in 1.21.1
-        var0.renderOutline(var21 - 2, var22 - 2, var23 - var21 + 4, var24 - var22 + 4, -267382764);
-        var0.renderOutline(var21 - 1, var22 - 1, var23 - var21 + 2, var24 - var22 + 2, -267382764);
-        var0.renderOutline(var21, var22, var23 - var21, var24 - var22, -1879048192);
+        var25.renderOutline(var20 - 2, var21 - 2, var22 - var20 + 4, var23 - var21 + 4, -267382764);
+        var25.renderOutline(var20 - 1, var21 - 1, var22 - var20 + 2, var23 - var21 + 2, -267382764);
+        var25.renderOutline(var20, var21, var22 - var20, var23 - var21, -1879048192);
+        var25.flush();
     }
 
-    private static void renderRound(
-        Matrix4f var0, int var1, int var2, int var3, float var4, double var5, double var7, int var9, int var10, float var11, int var12
-    ) {
+    private static void renderRound(Matrix4f var0, int var1, int var2, int var3, float var4, double var5, double var6, int var8, int var9, float var10, int var11) {
         RenderSystem.setShaderTexture(0, MinimapTexture.location());
         RenderSystem.setShader(net.minecraft.client.renderer.GameRenderer::getPositionTexColorShader);
-        BufferBuilder var13 = Tesselator.getInstance().begin(Mode.TRIANGLE_FAN, DefaultVertexFormat.POSITION_TEX_COLOR);
-        var13.addVertex(var0, (float)var1, (float)var2, 0.0F)
-            .setUv((float)((var5 - var9) * var11), (float)((var7 - var10) * var11))
-            .setColor(var12);
-        int var14 = 48;
+        BufferBuilder var12 = Tesselator.getInstance().begin(Mode.TRIANGLE_FAN, DefaultVertexFormat.POSITION_TEX_COLOR);
+        var12.addVertex(var0, (float)var1, (float)var2, 0.0F)
+            .setUv((float)((var5 - var8) * var10), (float)((var6 - var9) * var10))
+            .setColor(var11);
+        int var13 = 48;
 
-        for (int var15 = 0; var15 <= var14; var15++) {
-            double var16 = var15 % var14 * ((Math.PI * 2) / var14);
-            float var18 = var1 + (float)(Math.cos(var16) * var3);
-            float var19 = var2 + (float)(Math.sin(var16) * var3);
-            double var20 = var5 + Math.cos(var16) * var4;
-            double var22 = var7 + Math.sin(var16) * var4;
-            var13.addVertex(var0, var18, var19, 0.0F)
-                .setUv((float)((var20 - var9) * var11), (float)((var22 - var10) * var11))
-                .setColor(var12);
+        for (int var14 = 0; var14 <= var13; var14++) {
+            double var15 = var14 % var13 * ((Math.PI * 2) / var13);
+            float var17 = var1 + (float)(Math.cos(var15) * var3);
+            float var18 = var2 + (float)(Math.sin(var15) * var3);
+            double var19 = var5 + Math.cos(var15) * var4;
+            double var21 = var6 + Math.sin(var15) * var4;
+            var12.addVertex(var0, var17, var18, 0.0F)
+                .setUv((float)((var19 - var8) * var10), (float)((var21 - var9) * var10))
+                .setColor(var11);
         }
 
-        BufferUploader.drawWithShader(var13.buildOrThrow());
-        DrawHelper.ring(var0, (float)var1, (float)var2, var3 - 1.0F, var3 + 2.5F, var14, -267382764);
+        BufferUploader.drawWithShader(var12.buildOrThrow());
+        DrawHelper.ring(var0, (float)var1, (float)var2, var3 - 1.0F, var3 + 2.5F, var13, -267382764);
     }
 }
