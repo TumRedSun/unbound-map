@@ -27,6 +27,8 @@ public final class MinimapHud {
     private static int zoomIndex = 1;
     /** Enlarged minimap state, toggled with the (default Z) key. */
     private static boolean big;
+    /** Half-range of the CURRENT view in blocks (follows zoom and the enlarged mode). */
+    private static float viewBlocks = ZOOM_LEVELS[1];
     public static final Layer LAYER = MinimapHud::render;
 
     private MinimapHud() {
@@ -39,6 +41,11 @@ public final class MinimapHud {
 
     public static boolean isBig() {
         return big;
+    }
+
+    /** Half-range of what the HUD currently shows, in blocks (minimap zoom + enlarged mode). */
+    public static float currentViewBlocks() {
+        return viewBlocks;
     }
 
     public static void zoomIn() {
@@ -64,10 +71,19 @@ public final class MinimapHud {
                 var0.flush();
                 LabelPlacer.begin();
                 int var5 = Math.max(32, UnboundConfig.MINIMAP_SIZE.get()) / 2;
+                int normalHalf = var5;
                 if (big) {
+                    // enlarged map: the SAME blocks-per-pixel scale, just more of the
+                    // world inside the bigger frame (the old code kept the block range
+                    // and stretched it, which zoomed IN instead of showing more area)
                     int var5b = Math.min(var0.guiWidth(), var0.guiHeight()) / 2 - 16;
-                    var5 = Math.min(var5 * 2, Math.max(var5, var5b));
+                    var5 = Math.min(Math.max(var5, var5b), 480);
+                    float ratio = var5 / (float) normalHalf;
+                    viewBlocks = Math.min(ZOOM_LEVELS[zoomIndex] * ratio, 246.0F);
+                } else {
+                    viewBlocks = ZOOM_LEVELS[zoomIndex];
                 }
+                float var8 = viewBlocks;
 
                 // anchor: the configured corner, or the screen center for the
                 // enlarged mode when bigMapCentered is on
@@ -83,7 +99,6 @@ public final class MinimapHud {
                     : var5c == UnboundConfig.Anchor.TOP_LEFT || var5c == UnboundConfig.Anchor.TOP_RIGHT
                         ? var5 + 8
                         : var0.guiHeight() - var5 - 8;
-                float var8 = ZOOM_LEVELS[zoomIndex];
                 boolean var9 = UnboundConfig.MINIMAP_SHAPE.get() == UnboundConfig.Shape.SQUARE;
                 double var10 = var3.getX();
                 double var12 = var3.getZ();
@@ -94,7 +109,7 @@ public final class MinimapHud {
                 // gentle night dim straight in the map vertices, driven by the same
                 // nightDimStrength the world map uses (0 = constant Xaero colors);
                 // cave view is exempt: it is lit by block light, not by the sun
-                int var18 = tintFor(MapTileCache.nightFactor());
+                int var18 = tintFor(MapTileCache.nightFactor(MapTileCache.isMiniCave()));
                 RenderSystem.enableBlend();
                 RenderSystem.defaultBlendFunc();
                 if (var9) {
@@ -110,7 +125,7 @@ public final class MinimapHud {
                 // flips above the map and the N label must move on top of it
                 boolean var30 = UnboundConfig.SHOW_COORDS.get();
                 boolean var31 = UnboundConfig.SHOW_BIOME.get();
-                boolean var20 = MapTileCache.isCave();
+                boolean var20 = MapTileCache.isMiniCave();
                 int var21 = (var30 ? 1 : 0) + (var31 ? 1 : 0) + (var20 ? 1 : 0);
                 int var25 = var7 + var5 + 7;
                 int var23 = var21 * 10 + 4;
@@ -136,7 +151,9 @@ public final class MinimapHud {
                     if (var20) {
                         String var27 = I18n.get("gui.unboundmaps.caveLabel")
                             + ": "
-                            + (CaveState.isAuto() ? I18n.get("gui.unboundmaps.caveAuto") : "Y=" + CaveState.fixedY());
+                            + (CaveState.isPinned() && !CaveState.isAuto()
+                                ? "Y=" + CaveState.fixedY()
+                                : I18n.get("gui.unboundmaps.caveAuto"));
                         var0.drawCenteredString(var2.font, var27, var6, var26, -1727668);
                         var26 += 10;
                     }

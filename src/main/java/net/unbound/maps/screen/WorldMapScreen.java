@@ -157,13 +157,13 @@ public class WorldMapScreen extends Screen {
             // uniform Xaero-like night dim as a draw-time tint (cave view is exempt:
             // it is lit by block light, not by the sun); baked tiles are shared
             // between day and night, so no re-bake happens when the sky darkens
-            float nightF = MapTileCache.nightFactor();
+            float nightF = MapTileCache.nightFactor(MapTileCache.isCave());
             RenderSystem.setShaderColor(nightF, nightF, nightF, 1.0F);
 
             for (int var18 = var15; var18 <= var16; var18++) {
                 for (int var19 = var13; var19 <= var14; var19++) {
                     WorldMapCells.Cell var20 = WorldMapCells.cell(var19, var18);
-                    if (var20 != null) {
+                    if (WorldMapCells.isDrawable(var20)) {
                         double wx = (double)var19 * (double)cellSize;
                         double wz = (double)var18 * (double)cellSize;
                         double sx = (wx - var9) / this.blocksPerPixel;

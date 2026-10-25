@@ -8,7 +8,9 @@ import com.mojang.blaze3d.vertex.DefaultVertexFormat;
 import com.mojang.blaze3d.vertex.Tesselator;
 import com.mojang.blaze3d.vertex.VertexFormat.Mode;
 import java.io.InputStream;
+import java.lang.reflect.Field;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import net.minecraft.client.Minecraft;
@@ -18,7 +20,11 @@ import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.client.renderer.GameRenderer;
 import net.minecraft.client.renderer.entity.EntityRenderer;
+import net.minecraft.client.renderer.entity.LivingEntityRenderer;
 import net.minecraft.client.renderer.texture.DynamicTexture;
+import net.minecraft.client.model.EntityModel;
+import net.minecraft.client.model.HierarchicalModel;
+import net.minecraft.client.model.geom.ModelPart;
 import net.minecraft.client.resources.PlayerSkin;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.util.Mth;
@@ -47,10 +53,26 @@ import org.joml.Matrix4f;
 public final class EntityRadar {
     private static final int ICON = 9;
     private static final int EDGE_MARGIN = 4;
-    /** face pixel rect (u, v, w, h) inside the entity texture, per entity type. */
+    /** face pixel rect (u, v, w, h) inside the entity texture, per entity type - FALLBACK ONLY. */
     private static final Map<EntityType<?>, int[]> FACES = buildFaces();
+    /** face rect derived from the live entity model, normalized 0..1 (u0, v0, u1, v1); NULL_FACE = none. */
+    private static final Map<EntityType<?>, float[]> MODEL_FACES = new HashMap<>();
+    private static final float[] NULL_FACE = new float[0];
     /** source texture -> cropped icon texture (null value = crop failed, use the name). */
     private static final Map<ResourceLocation, ResourceLocation> ICONS = new HashMap<>();
+    /** texture -> cached pixel size (the old code decoded the whole PNG on every icon draw). */
+    private static final Map<ResourceLocation, int[]> TEXTURE_SIZES = new HashMap<>();
+    // reflection handles into the baked model parts. ModelPart.cubes/children and
+    // Cube.polygons are private, and Polygon/Vertex are private nested classes, so
+    // everything below goes through raw reflection (names are stable at runtime:
+    // NeoForge 1.21.x runs with the official mapping names in production too)
+    private static final Field CUBES_FIELD = field(ModelPart.class, "cubes");
+    private static final Field CHILDREN_FIELD = field(ModelPart.class, "children");
+    private static final Field POLYGONS_FIELD = field(ModelPart.Cube.class, "polygons");
+    private static final Field NORMAL_FIELD = declaredField(POLYGONS_FIELD == null ? null : POLYGONS_FIELD.getType(), "normal");
+    private static final Field VERTICES_FIELD = declaredField(POLYGONS_FIELD == null ? null : POLYGONS_FIELD.getType(), "vertices");
+    private static final Field U_FIELD = declaredField(VERTICES_FIELD == null ? null : VERTICES_FIELD.getType().componentType(), "u");
+    private static final Field V_FIELD = declaredField(VERTICES_FIELD == null ? null : VERTICES_FIELD.getType().componentType(), "v");
     private static int iconSeq;
     private static final int DOT_HOSTILE = 0xFFE05050;
     private static final int DOT_PASSIVE = 0xFF6FE06F;
@@ -60,10 +82,10 @@ public final class EntityRadar {
     }
 
     /**
-     * Head face rects from the vanilla model boxes: a box at texture (u,v) with
-     * depth d has its front face at (u+d, v+d). Most heads are 8x8x8 (face at
-     * 8,8), quadruped heads 6x6x6 (face at 6,6) - this is what made cows, pigs,
-     * sheep etc. render as gray squares before.
+     * Head face rects from the vanilla model boxes - only used as a fallback when
+     * the live model could not be inspected. A box at texture (u,v) with depth d has
+     * its front face at (u+d, v+d), e.g. humanoid 8x8x8 heads at (8,8), pig 8x8x6
+     * at (6,6) sized 8x8, wolf 6x6x4 at (4,4).
      */
     private static Map<EntityType<?>, int[]> buildFaces() {
         Map<EntityType<?>, int[]> var0 = new HashMap<>();
@@ -72,19 +94,26 @@ public final class EntityRadar {
         square8(var0, EntityType.SKELETON, EntityType.STRAY, EntityType.WITHER_SKELETON, EntityType.BOGGED);
         square8(var0, EntityType.CREEPER, EntityType.WITCH, EntityType.EVOKER, EntityType.VINDICATOR);
         square8(var0, EntityType.ILLUSIONER, EntityType.PILLAGER, EntityType.VILLAGER, EntityType.WANDERING_TRADER);
-        square8(var0, EntityType.ENDERMAN, EntityType.PIG, EntityType.SNOW_GOLEM, EntityType.SQUID);
+        square8(var0, EntityType.ENDERMAN, EntityType.SNOW_GOLEM, EntityType.SQUID);
         square8(var0, EntityType.GLOW_SQUID, EntityType.GUARDIAN, EntityType.ELDER_GUARDIAN, EntityType.HOGLIN);
         square8(var0, EntityType.ZOGLIN, EntityType.RAVAGER, EntityType.WARDEN, EntityType.BLAZE);
         square8(var0, EntityType.PHANTOM, EntityType.PANDA);
-        square6(var0, EntityType.COW, EntityType.MOOSHROOM, EntityType.SHEEP, EntityType.CAT);
-        square6(var0, EntityType.OCELOT, EntityType.FOX, EntityType.POLAR_BEAR, EntityType.WOLF);
+        var0.put(EntityType.PIG, new int[]{6, 6, 8, 8});
+        var0.put(EntityType.COW, new int[]{6, 6, 8, 8});
+        var0.put(EntityType.MOOSHROOM, new int[]{6, 6, 8, 8});
+        var0.put(EntityType.SHEEP, new int[]{6, 6, 6, 6});
+        var0.put(EntityType.WOLF, new int[]{4, 4, 6, 6});
+        var0.put(EntityType.CAT, new int[]{5, 5, 5, 4});
+        var0.put(EntityType.OCELOT, new int[]{5, 5, 5, 4});
+        var0.put(EntityType.FOX, new int[]{7, 11, 6, 6});
         var0.put(EntityType.BEE, new int[]{8, 8, 6, 6});
-        square3(var0, EntityType.CHICKEN, EntityType.BAT);
-        var0.put(EntityType.SPIDER, new int[]{8, 12, 8, 8});
-        var0.put(EntityType.CAVE_SPIDER, new int[]{8, 12, 8, 8});
-        var0.put(EntityType.GHAST, new int[]{9, 9, 9, 9});
-        var0.put(EntityType.SLIME, new int[]{0, 0, 8, 8});
-        var0.put(EntityType.MAGMA_CUBE, new int[]{0, 0, 8, 8});
+        var0.put(EntityType.CHICKEN, new int[]{3, 3, 4, 6});
+        var0.put(EntityType.BAT, new int[]{3, 3, 3, 3});
+        var0.put(EntityType.SPIDER, new int[]{40, 12, 8, 8});
+        var0.put(EntityType.CAVE_SPIDER, new int[]{40, 12, 8, 8});
+        var0.put(EntityType.GHAST, new int[]{16, 16, 16, 16});
+        var0.put(EntityType.SLIME, new int[]{8, 24, 8, 8});
+        var0.put(EntityType.MAGMA_CUBE, new int[]{8, 24, 8, 8});
         var0.put(EntityType.RABBIT, new int[]{3, 3, 4, 4});
         return var0;
     }
@@ -92,18 +121,6 @@ public final class EntityRadar {
     private static void square8(Map<EntityType<?>, int[]> var0, EntityType<?>... var1) {
         for (EntityType<?> var5 : var1) {
             var0.put(var5, new int[]{8, 8, 8, 8});
-        }
-    }
-
-    private static void square6(Map<EntityType<?>, int[]> var0, EntityType<?>... var1) {
-        for (EntityType<?> var5 : var1) {
-            var0.put(var5, new int[]{6, 6, 6, 6});
-        }
-    }
-
-    private static void square3(Map<EntityType<?>, int[]> var0, EntityType<?>... var1) {
-        for (EntityType<?> var5 : var1) {
-            var0.put(var5, new int[]{3, 3, 3, 3});
         }
     }
 
@@ -171,8 +188,7 @@ public final class EntityRadar {
         ResourceLocation var7 = null;
         ResourceLocation var8 = null;
         String var9 = null;
-        int texW = 64;
-        int texH = 64;
+        int[] rect = null;
         if (var3 instanceof Player var10) {
             PlayerSkin var11;
             try {
@@ -183,30 +199,26 @@ public final class EntityRadar {
 
             if (var11 != null) {
                 var8 = var11.texture();
-                int[] dims = textureSize(var2, var8);
-                texW = dims[0];
-                texH = dims[1];
+                rect = new int[]{8, 8, 8, 8};
                 var7 = faceIcon(var2, var8, 8, 8, 8, 8);
             }
 
             var9 = var10.getGameProfile().getName();
         } else {
-            int[] var13 = FACES.get(var3.getType());
-            if (var13 != null) {
+            // the face rect comes from the LIVE entity model (works for vanilla AND
+            // modded mobs with a standard 'head' part); the static table is only a
+            // fallback for exotic models
+            rect = faceRect(var2, var3);
+            if (rect != null) {
                 try {
                     var8 = ((EntityRenderer)var2.getEntityRenderDispatcher().getRenderer(var3)).getTextureLocation(var3);
                 } catch (Exception var14) {
                     var8 = null;
+                    rect = null;
                 }
 
                 if (var8 != null) {
-                    int[] dims = textureSize(var2, var8);
-                    texW = dims[0];
-                    texH = dims[1];
-                    var7 = faceIcon(var2, var8, var13[0], var13[1], var13[2], var13[3]);
-                    if (var7 == null) {
-                        var8 = null;
-                    }
+                    var7 = faceIcon(var2, var8, rect[0], rect[1], rect[2], rect[3]);
                 }
             }
 
@@ -225,9 +237,10 @@ public final class EntityRadar {
         if (var7 != null) {
             DrawHelper.coloredQuad(var1, var15 - 1.0F, var16 - 1.0F, var15 + (float)ICON + 1.0F, var16 + (float)ICON + 1.0F, -872415232);
             blitIcon(var1, var7, var15, var16, (float)ICON, (float)ICON);
-        } else if (var8 != null) {
+        } else if (var8 != null && rect != null) {
             DrawHelper.coloredQuad(var1, var15 - 1.0F, var16 - 1.0F, var15 + (float)ICON + 1.0F, var16 + (float)ICON + 1.0F, -872415232);
-            blitFace(var1, var8, var15, var16, (float)ICON, (float)ICON, 8.0F, 8.0F, 8.0F, 8.0F, (float)texW, (float)texH);
+            int[] dims = textureSize(var2, var8);
+            blitFace(var1, var8, var15, var16, (float)ICON, (float)ICON, (float)rect[0], (float)rect[1], (float)rect[2], (float)rect[3], (float)dims[0], (float)dims[1]);
         } else {
             // plain colored dot, no bulky dark box around it
             drawDot(var0, var1, var4, var5, dotColor(var3));
@@ -250,35 +263,295 @@ public final class EntityRadar {
     }
 
     /**
-     * Real texture dimensions: from the resource PNG when readable, otherwise
-     * from the registered DynamicTexture (downloaded Skin Restorer skins),
+     * Real texture dimensions, cached per texture (the old code re-decoded the
+     * whole PNG on EVERY icon draw). Sources: the resource PNG when readable,
+     * otherwise the registered DynamicTexture (downloaded Skin Restorer skins),
      * falling back to the modern 64x64 skin layout.
      */
     private static int[] textureSize(Minecraft var0, ResourceLocation var1) {
+        int[] var2 = TEXTURE_SIZES.get(var1);
+        if (var2 != null) {
+            return var2;
+        }
+        var2 = new int[]{64, 64};
         try {
-            Optional<net.minecraft.server.packs.resources.Resource> var2 = var0.getResourceManager().getResource(var1);
-            if (var2.isPresent()) {
-                NativeImage var3;
-                try (InputStream var4 = var2.get().open()) {
-                    var3 = NativeImage.read(var4);
+            Optional<net.minecraft.server.packs.resources.Resource> var3 = var0.getResourceManager().getResource(var1);
+            if (var3.isPresent()) {
+                NativeImage var4;
+                try (InputStream var5 = var3.get().open()) {
+                    var4 = NativeImage.read(var5);
                 }
 
-                int[] var5 = new int[]{var3.getWidth(), var3.getHeight()};
-                var3.close();
-                return var5;
+                var2 = new int[]{var4.getWidth(), var4.getHeight()};
+                var4.close();
             }
         } catch (Throwable var6) {
-        }
-
-        try {
-            net.minecraft.client.renderer.texture.AbstractTexture var7 = var0.getTextureManager().getTexture(var1);
-            if (var7 instanceof DynamicTexture var8 && var8.getPixels() != null) {
-                return new int[]{var8.getPixels().getWidth(), var8.getPixels().getHeight()};
+            try {
+                net.minecraft.client.renderer.texture.AbstractTexture var7 = var0.getTextureManager().getTexture(var1);
+                if (var7 instanceof DynamicTexture var8 && var8.getPixels() != null) {
+                    var2 = new int[]{var8.getPixels().getWidth(), var8.getPixels().getHeight()};
+                }
+            } catch (Throwable var9) {
             }
-        } catch (Throwable var9) {
         }
 
-        return new int[]{64, 64};
+        if (TEXTURE_SIZES.size() > 512) {
+            TEXTURE_SIZES.clear();
+        }
+
+        TEXTURE_SIZES.put(var1, var2);
+        return var2;
+    }
+
+    /**
+     * Face pixel rect {x, y, w, h} for a mob: read from the LIVE entity model's
+     * 'head' part (works for every vanilla and modded model that keeps its cubes
+     * under a head part, regardless of texture size), falling back to the static
+     * per-type table for exotic layouts.
+     */
+    private static int[] faceRect(Minecraft var0, Entity var1) {
+        float[] var2 = MODEL_FACES.get(var1.getType());
+        if (var2 == null) {
+            var2 = deriveFace(var0, var1);
+            if (MODEL_FACES.size() > 512) {
+                MODEL_FACES.clear();
+            }
+            MODEL_FACES.put(var1.getType(), var2);
+        }
+
+        if (var2.length == 4) {
+            ResourceLocation var3;
+            try {
+                var3 = ((EntityRenderer)var0.getEntityRenderDispatcher().getRenderer(var1)).getTextureLocation(var1);
+            } catch (Exception var4) {
+                return null;
+            }
+
+            int[] var5 = textureSize(var0, var3);
+            int var6 = Mth.clamp(Math.round(var2[0] * var5[0]), 0, var5[0] - 1);
+            int var7 = Mth.clamp(Math.round(var2[1] * var5[1]), 0, var5[1] - 1);
+            int var8 = Mth.clamp(Math.round((var2[2] - var2[0]) * var5[0]), 1, var5[0] - var6);
+            int var9 = Mth.clamp(Math.round((var2[3] - var2[1]) * var5[1]), 1, var5[1] - var7);
+            return new int[]{var6, var7, var8, var9};
+        }
+
+        int[] var10 = FACES.get(var1.getType());
+        if (var10 == null) {
+            return null;
+        }
+        try {
+            ResourceLocation var11 = ((EntityRenderer)var0.getEntityRenderDispatcher().getRenderer(var1)).getTextureLocation(var1);
+            int[] var12 = textureSize(var0, var11);
+            int var13 = Mth.clamp(var10[0], 0, var12[0] - 1);
+            int var14 = Mth.clamp(var10[1], 0, var12[1] - 1);
+            int var15 = Math.min(var10[2], var12[0] - var13);
+            int var16 = Math.min(var10[3], var12[1] - var14);
+            return var15 > 0 && var16 > 0 ? new int[]{var13, var14, var15, var16} : null;
+        } catch (Exception var17) {
+            return null;
+        }
+    }
+
+    /**
+     * Reads the front (north) face of the model's head part and returns its
+     * texture UVs normalized to 0..1: {u0, v0, u1, v1}. NULL_FACE when the model
+     * has no inspectable head.
+     */
+    private static float[] deriveFace(Minecraft var0, Entity var1) {
+        try {
+            net.minecraft.client.renderer.entity.EntityRenderer<?> var2 = var0.getEntityRenderDispatcher().getRenderer(var1);
+            if (var2 instanceof LivingEntityRenderer<?, ?> var3) {
+                EntityModel<?> var4 = var3.getModel();
+                ModelPart var5 = headPart(var4);
+                if (var5 != null) {
+                    float[] var6 = northFaceRect(var5, 0);
+                    if (var6 != null) {
+                        return var6;
+                    }
+                }
+            }
+        } catch (Throwable var7) {
+        }
+
+        return NULL_FACE;
+    }
+
+    /** Finds the head ModelPart: public hierarchical lookup first, then reflection on 'head' fields. */
+    private static ModelPart headPart(EntityModel<?> var0) {
+        if (var0 instanceof HierarchicalModel<?> var1) {
+            try {
+                Optional<ModelPart> var2 = var1.getAnyDescendantWithName("head");
+                if (var2.isPresent()) {
+                    return var2.get();
+                }
+            } catch (Throwable var3) {
+            }
+        }
+
+        for (Class<?> var4 = var0.getClass(); var4 != null && var4 != Object.class; var4 = var4.getSuperclass()) {
+            for (Field var5 : var4.getDeclaredFields()) {
+                if (ModelPart.class.isAssignableFrom(var5.getType())) {
+                    String var6 = var5.getName();
+                    if (var6.equals("head") || var6.equals("realHead")) {
+                        try {
+                            var5.setAccessible(true);
+                            return (ModelPart)var5.get(var0);
+                        } catch (Throwable var7) {
+                        }
+                    }
+                }
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Largest north-facing face rect within the part (and, when the part itself
+     * has no cubes like the wolf's 'head' wrapper, within its children). The
+     * largest wins so a small nose/snout box never beats the actual face.
+     * All cube/polygon/vertex access is reflective - the nested types are private.
+     */
+    private static float[] northFaceRect(ModelPart var0, int var1) {
+        if (POLYGONS_FIELD == null || NORMAL_FIELD == null || VERTICES_FIELD == null || U_FIELD == null || V_FIELD == null) {
+            return null;
+        }
+        List<Object> var2 = cubesOf(var0);
+        if (var2 != null && !var2.isEmpty()) {
+            float var3 = 0.0F;
+            float[] var4 = null;
+
+            for (Object var5 : var2) {
+                Object var6;
+                try {
+                    var6 = POLYGONS_FIELD.get(var5);
+                } catch (Throwable var7) {
+                    continue;
+                }
+
+                if (var6 == null) {
+                    continue;
+                }
+
+                int var8 = java.lang.reflect.Array.getLength(var6);
+
+                for (int var9 = 0; var9 < var8; var9++) {
+                    Object var10 = java.lang.reflect.Array.get(var6, var9);
+                    if (var10 == null) {
+                        continue;
+                    }
+
+                    try {
+                        org.joml.Vector3f var11 = (org.joml.Vector3f)NORMAL_FIELD.get(var10);
+                        if (var11 == null || var11.z() > -0.5F) {
+                            continue;
+                        }
+
+                        Object var12 = VERTICES_FIELD.get(var10);
+                        if (var12 == null) {
+                            continue;
+                        }
+
+                        int var13 = java.lang.reflect.Array.getLength(var12);
+                        if (var13 == 0) {
+                            continue;
+                        }
+
+                        float var14 = 1.0F;
+                        float var15 = 1.0F;
+                        float var16 = 0.0F;
+                        float var17 = 0.0F;
+
+                        for (int var18 = 0; var18 < var13; var18++) {
+                            Object var19 = java.lang.reflect.Array.get(var12, var18);
+                            if (var19 == null) {
+                                continue;
+                            }
+
+                            float var20 = U_FIELD.getFloat(var19);
+                            float var21 = V_FIELD.getFloat(var19);
+                            var14 = Math.min(var14, var20);
+                            var16 = Math.max(var16, var20);
+                            var15 = Math.min(var15, var21);
+                            var17 = Math.max(var17, var21);
+                        }
+
+                        float var22 = (var16 - var14) * (var17 - var15);
+                        if (var22 > var3) {
+                            var3 = var22;
+                            var4 = new float[]{var14, var15, var16, var17};
+                        }
+                    } catch (Throwable var23) {
+                    }
+                }
+            }
+
+            if (var4 != null) {
+                return var4;
+            }
+        }
+
+        if (var1 < 2) {
+            Map<String, ModelPart> var24 = childrenOf(var0);
+            if (var24 != null) {
+                for (ModelPart var25 : var24.values()) {
+                    float[] var26 = northFaceRect(var25, var1 + 1);
+                    if (var26 != null) {
+                        return var26;
+                    }
+                }
+            }
+        }
+
+        return null;
+    }
+
+    private static Field field(Class<?> var0, String var1) {
+        try {
+            Field var2 = var0.getDeclaredField(var1);
+            var2.setAccessible(true);
+            return var2;
+        } catch (Throwable var3) {
+            return null;
+        }
+    }
+
+    /** Field lookup on a class known only reflectively (private nested classes). */
+    private static Field declaredField(Class<?> var0, String var1) {
+        if (var0 == null) {
+            return null;
+        }
+        try {
+            Field var2 = var0.getDeclaredField(var1);
+            var2.setAccessible(true);
+            return var2;
+        } catch (Throwable var3) {
+            return null;
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private static List<Object> cubesOf(ModelPart var0) {
+        if (CUBES_FIELD == null) {
+            return null;
+        }
+        try {
+            return (List<Object>)CUBES_FIELD.get(var0);
+        } catch (Throwable var1) {
+            return null;
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private static Map<String, ModelPart> childrenOf(ModelPart var0) {
+        if (CHILDREN_FIELD == null) {
+            return null;
+        }
+        try {
+            return (Map<String, ModelPart>)CHILDREN_FIELD.get(var0);
+        } catch (Throwable var1) {
+            return null;
+        }
     }
 
     private static void drawLabel(GuiGraphics var0, Font var1, float var2, float var3, String var4) {

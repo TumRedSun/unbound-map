@@ -42,14 +42,19 @@ public final class MapTileCache {
     public static final int UNKNOWN = -15723752;
     private static final int MAX_ENTRIES = 40000;
     private static final int MAX_SLICE_ENTRIES = 8000;
+    private static final int MAX_SLICE_BUCKETS = 4;
     private static final Map<Long, MapTileCache.Entry> CHUNKS = new LinkedHashMap<>(4096, 0.75F, true);
-    private static final Map<Integer, Map<Long, MapTileCache.Entry>> SLICES = new HashMap<>();
+    /** Slice (cave) tiles per 8-block bucket; access-ordered so old buckets can be trimmed. */
+    private static final Map<Integer, Map<Long, MapTileCache.Entry>> SLICES = new LinkedHashMap<>(8, 0.75F, true);
     private static boolean cave;
     private static int sliceBucket;
+    /** Minimap view state (always automatic, see {@link CaveState}). */
+    private static boolean miniCave;
+    private static int miniBucket;
     /** 16 perceptual light gradations: caves and torch-lit areas get many distinguishable steps. */
     private static final float[] LIGHT_CURVE = {
-        0.10F, 0.13F, 0.16F, 0.19F, 0.22F, 0.25F, 0.29F, 0.33F,
-        0.38F, 0.43F, 0.49F, 0.56F, 0.64F, 0.73F, 0.85F, 1.00F
+        0.16F, 0.19F, 0.23F, 0.27F, 0.31F, 0.35F, 0.40F, 0.45F,
+        0.51F, 0.57F, 0.64F, 0.71F, 0.79F, 0.87F, 0.94F, 1.00F
     };
     /** How much sky light each night-dim step removes (config 0..3; 0 = Xaero-like constant colors). */
     private static final float NIGHT_STEP = 0.12F;
@@ -68,14 +73,24 @@ public final class MapTileCache {
     private MapTileCache() {
     }
 
-    /** True while the maps render the cave (slice) view. Driven by {@link CaveState}. */
+    /** True while the WORLD MAP renders the cave (slice) view. Driven by {@link CaveState}. */
     public static boolean isCave() {
         return cave;
     }
 
-    /** Active slice bucket (8-block altitude band). */
+    /** World map active slice bucket (8-block altitude band). */
     public static int caveBucket() {
         return sliceBucket;
+    }
+
+    /** True while the MINIMAP renders the cave (slice) view - always automatic. */
+    public static boolean isMiniCave() {
+        return miniCave;
+    }
+
+    /** Minimap active slice bucket (8-block altitude band). */
+    public static int miniBucket() {
+        return miniBucket;
     }
 
     /**
@@ -83,16 +98,23 @@ public final class MapTileCache {
      * when the view mode or the slice bucket changed. Cheap to call every tick.
      */
     public static void onCaveViewChanged() {
-        boolean newCave = CaveState.isCave();
-        if (newCave != cave) {
+        boolean newCave = CaveState.isWorldCave();
+        int newBucket = bucketOf(CaveState.worldSliceY());
+        if (newCave != cave || newBucket != sliceBucket) {
             cave = newCave;
-            MinimapTexture.invalidateAll();
+            sliceBucket = newBucket;
+            // the per-bucket tile caches are KEPT: moving up or down a cave reuses
+            // the slices computed for heights you already visited (clearing them
+            // made the view go dark for seconds on every 8-block height change)
+            trimSlices();
         }
 
-        int bucket = bucketOf(CaveState.sliceY());
-        if (bucket != sliceBucket) {
-            sliceBucket = bucket;
-            SLICES.clear();
+        boolean newMiniCave = CaveState.isMiniCave();
+        int newMiniBucket = bucketOf(CaveState.miniSliceY());
+        if (newMiniCave != miniCave || newMiniBucket != miniBucket) {
+            miniCave = newMiniCave;
+            miniBucket = newMiniBucket;
+            trimSlices();
             MinimapTexture.invalidateAll();
         }
 
@@ -102,14 +124,33 @@ public final class MapTileCache {
         nightStrength = intFlag(UnboundConfig.NIGHT_DIM_STRENGTH, 0);
     }
 
+    /** Keeps only the most recently used slice buckets (the active ones are touched on access). */
+    private static void trimSlices() {
+        SLICES.get(sliceBucket); // refresh access order
+        SLICES.get(miniBucket);
+        while (SLICES.size() > MAX_SLICE_BUCKETS) {
+            Integer oldest = null;
+            for (Integer key : SLICES.keySet()) {
+                if (key != sliceBucket && key != miniBucket) {
+                    oldest = key;
+                    break;
+                }
+            }
+            if (oldest == null) {
+                break;
+            }
+            SLICES.remove(oldest);
+        }
+    }
+
     /**
      * Uniform day/night dim factor for surface map tiles, applied at draw time
      * (shader color / vertex tint): 1.0 by day, down to 1 - strength*0.12 by
      * full night (strength 0 = constant Xaero-like colors, 3 = 36% darker).
-     * Cave mode is exempt: it is lit by block light, not by the sun.
+     * The cave view is exempt: it is lit by block light, not by the sun.
      */
-    public static float nightFactor() {
-        if (nightStrength <= 0 || MapTileCache.cave) {
+    public static float nightFactor(boolean caveView) {
+        if (nightStrength <= 0 || caveView) {
             return 1.0F;
         }
         Minecraft mc = Minecraft.getInstance();
@@ -130,7 +171,7 @@ public final class MapTileCache {
             var5 *= 1.0F - nightStrength * NIGHT_STEP * (float)var0.getSkyDarken() / 15.0F;
         }
 
-        return Math.max(0.10F, Math.max(var4, var5));
+        return Math.max(0.16F, Math.max(var4, var5));
     }
 
     /**
@@ -168,8 +209,14 @@ public final class MapTileCache {
         return var0 + 512 >> 3;
     }
 
+    /**
+     * Cut height of a slice bucket - the bucket's LOWEST block. The cut is never
+     * ABOVE the player's feet (the old center-of-bucket cut showed the floor of
+     * the level ABOVE the player for half of every 8-block band, which looked
+     * like the map "not showing my height").
+     */
     public static int bucketCenterY(int var0) {
-        return (var0 << 3) - 512 + 4;
+        return (var0 << 3) - 512;
     }
 
     public static int sliceRange() {
@@ -196,8 +243,8 @@ public final class MapTileCache {
         }
     }
 
-    public static int colorFor(ClientLevel var0, int var1, int var2, boolean var3) {
-        return var3 ? getSliceColor(var0, var1, var2, sliceBucket) : getColor(var0, var1, var2);
+    public static int colorFor(ClientLevel var0, int var1, int var2, boolean var3, int var4) {
+        return var3 ? getSliceColor(var0, var1, var2, var4) : getColor(var0, var1, var2);
     }
 
     public static int columnY(ClientLevel var0, int var1, int var2, int var3, boolean var4) {
@@ -231,6 +278,39 @@ public final class MapTileCache {
 
     public static boolean contains(long var0) {
         return CHUNKS.containsKey(var0);
+    }
+
+    /**
+     * True when a redraw of this chunk would come straight from the cache (cheap),
+     * false when it would trigger a fresh heightmap / cut-lid computation.
+     * Used to budget fresh work without throttling cache redraws.
+     */
+    public static boolean isCached(long var0, boolean var1, int var2) {
+        if (var1) {
+            Map<Long, MapTileCache.Entry> var3 = SLICES.get(var2);
+            return var3 != null && var3.containsKey(var0);
+        }
+        return CHUNKS.containsKey(var0);
+    }
+
+    /**
+     * True when the tile cache has no LIVE data for this chunk in the given view
+     * mode (nothing computed yet, or only the persistent-store copy while the real
+     * chunk is loaded) - such chunks are picked up by the periodic loaded-chunk scan
+     * so freshly explored terrain reaches the maps without waiting for the player.
+     */
+    public static boolean needsRefresh(ClientLevel var0, long var1, boolean var2, int var3) {
+        if (var2) {
+            Map<Long, MapTileCache.Entry> var4 = SLICES.get(var3);
+            return var4 == null || !var4.containsKey(var1);
+        }
+        MapTileCache.Entry var5 = CHUNKS.get(var1);
+        if (var5 == null) {
+            return true;
+        }
+        int var6 = ChunkPos.getX(var1);
+        int var7 = ChunkPos.getZ(var1);
+        return var5.stored && var0.getChunk(var6, var7, ChunkStatus.FULL, false) != null;
     }
 
     public static void clearAll() {
@@ -295,7 +375,7 @@ public final class MapTileCache {
      * Computes a chunk entry from live world data (biome tint + water tint),
      * falling back to the persistent store when the chunk is unloaded.
      * Surface colors are full-bright Xaero-style: map color + biome tint + water
-     * depth + hillshade. Day/night is a uniform draw-time dim ({@link #nightFactor()}),
+     * depth + hillshade. Day/night is a uniform draw-time dim (the draw-time night dim),
      * so tiles never depend on the time of day (the old per-column light capture
      * sampled the sky INSIDE opaque surface blocks and blacked out the land at night).
      * When {@code allowShade} is true the hillshade pass runs immediately;
@@ -515,6 +595,7 @@ public final class MapTileCache {
 
     public static int getSliceColor(ClientLevel var0, int var1, int var2, int var3) {
         int var4 = var1 >> 4;
+
         int var5 = var2 >> 4;
         long var6 = ChunkPos.asLong(var4, var5);
         Map<Long, MapTileCache.Entry> var8 = SLICES.computeIfAbsent(var3, var0x -> new LinkedHashMap<>(512, 0.75F, true));
