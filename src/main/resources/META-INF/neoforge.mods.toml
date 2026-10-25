@@ -8,7 +8,7 @@ license="GPL-3.0-or-later"
 
 [[mods]]
 modId="unboundmaps"
-version="1.3.0"
+version="1.4.0"
 displayName="Unbound Maps"
 authors="Unbound"
 description='''Original open-source minimap and world map for NeoForge: a square HUD minimap

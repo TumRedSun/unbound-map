@@ -42,47 +42,39 @@ public final class MapTileCache {
     private static final int SLICE_BUCKET_BITS = 3;
     private static final Map<Long, MapTileCache.Entry> CHUNKS = new LinkedHashMap<>(4096, 0.75F, true);
     private static final Map<Integer, Map<Long, MapTileCache.Entry>> SLICES = new HashMap<>();
-    private static boolean minimapSlice;
-    private static boolean worldMapSlice;
+    private static boolean cave;
     private static int sliceBucket;
 
     private MapTileCache() {
     }
 
-    /** Cave (slice) view of the HUD minimap — independent from the world map's. */
-    public static boolean isMinimapSlice() {
-        return minimapSlice;
+    /** True while the maps render the cave (slice) view. Driven by {@link CaveState}. */
+    public static boolean isCave() {
+        return cave;
     }
 
-    /** Cave (slice) view of the world map — independent from the minimap's. */
-    public static boolean isWorldMapSlice() {
-        return worldMapSlice;
-    }
-
-    public static void setMinimapSlice(boolean var0) {
-        if (var0 != minimapSlice) {
-            minimapSlice = var0;
-            MinimapTexture.invalidateAll();
-        }
-    }
-
-    /** World map cells are keyed by (cave, bucket), so no invalidation is needed here. */
-    public static void setWorldMapSlice(boolean var0) {
-        worldMapSlice = var0;
-    }
-
-    public static boolean toggleMinimapSlice() {
-        setMinimapSlice(!minimapSlice);
-        return minimapSlice;
-    }
-
-    public static boolean toggleWorldMapSlice() {
-        setWorldMapSlice(!worldMapSlice);
-        return worldMapSlice;
-    }
-
+    /** Active slice bucket (8-block altitude band). */
     public static int caveBucket() {
         return sliceBucket;
+    }
+
+    /**
+     * Re-syncs the view flags from {@link CaveState} and invalidates caches
+     * when the view mode or the slice bucket changed. Cheap to call every tick.
+     */
+    public static void onCaveViewChanged() {
+        boolean newCave = CaveState.isCave();
+        if (newCave != cave) {
+            cave = newCave;
+            MinimapTexture.invalidateAll();
+        }
+
+        int bucket = bucketOf(CaveState.sliceY());
+        if (bucket != sliceBucket) {
+            sliceBucket = bucket;
+            SLICES.clear();
+            MinimapTexture.invalidateAll();
+        }
     }
 
     public static int bucketOf(int var0) {
@@ -106,25 +98,6 @@ public final class MapTileCache {
             return var0.get();
         } catch (NullPointerException | IllegalStateException var2) {
             return var1;
-        }
-    }
-
-    public static boolean updateCaveBucket(int var0) {
-        int var1 = bucketOf(var0);
-        if (var1 == sliceBucket) {
-            return false;
-        } else {
-            sliceBucket = var1;
-            SLICES.clear();
-            if (minimapSlice) {
-                MinimapTexture.invalidateAll();
-            }
-
-            if (worldMapSlice) {
-                WorldMapCells.clearAll();
-            }
-
-            return true;
         }
     }
 

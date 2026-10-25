@@ -17,6 +17,7 @@ import net.minecraft.client.resources.language.I18n;
 import net.minecraft.util.Mth;
 import net.unbound.maps.UnboundConfig;
 import net.unbound.maps.UnboundMapsDebug;
+import net.unbound.maps.mapdata.CaveState;
 import net.unbound.maps.mapdata.MapTileCache;
 import net.unbound.maps.mapdata.MinimapTexture;
 import org.joml.Matrix4f;
@@ -57,7 +58,7 @@ public final class MinimapHud {
         Minecraft var2 = Minecraft.getInstance();
         LocalPlayer var3 = var2.player;
         ClientLevel var4 = var2.level;
-        if (var3 != null && var4 != null && UnboundConfig.MINIMAP_ENABLED.get()) {
+        if (var3 != null && var4 != null && var2.screen == null && UnboundConfig.MINIMAP_ENABLED.get()) {
             try {
                 var0.flush();
                 int var5 = Math.max(32, UnboundConfig.MINIMAP_SIZE.get()) / 2;
@@ -88,7 +89,7 @@ public final class MinimapHud {
                 DrawHelper.playerArrow(var17, var6, var7, var3.getYRot());
                 boolean var18 = UnboundConfig.SHOW_COORDS.get();
                 boolean var19 = UnboundConfig.SHOW_BIOME.get();
-                boolean var20 = MapTileCache.isMinimapSlice();
+                boolean var20 = MapTileCache.isCave();
                 int var21 = (var18 ? 1 : 0) + (var19 ? 1 : 0) + (var20 ? 1 : 0);
                 if (var21 > 0) {
                     int var22 = 2 * var5 + 6;
@@ -99,7 +100,10 @@ public final class MinimapHud {
                     var0.renderOutline(var24, var25, var24 + var22, var25 + var23, 1711276032);
                     int var26 = var25 + 3;
                     if (var20) {
-                        var0.drawCenteredString(var2.font, I18n.get("gui.unboundmaps.caveLabel"), var6, var26, -1727668);
+                        String var21c = I18n.get("gui.unboundmaps.caveLabel")
+                            + ": "
+                            + (CaveState.isAuto() ? I18n.get("gui.unboundmaps.caveAuto") : "Y=" + CaveState.fixedY());
+                        var0.drawCenteredString(var2.font, var21c, var6, var26, -1727668);
                         var26 += 10;
                     }
 

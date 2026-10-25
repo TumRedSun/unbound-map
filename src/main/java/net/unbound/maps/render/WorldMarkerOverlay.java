@@ -36,7 +36,7 @@ public final class WorldMarkerOverlay {
         Minecraft var2 = Minecraft.getInstance();
         LocalPlayer var3 = var2.player;
         ClientLevel var4 = var2.level;
-        if (var3 != null && var4 != null && UnboundConfig.SHOW_MARKERS_ON_SCREEN.get()) {
+        if (var3 != null && var4 != null && var2.screen == null && UnboundConfig.SHOW_MARKERS_ON_SCREEN.get()) {
             try {
                 List<Waypoint> var5 = WaypointManager.currentWaypoints();
                 if (var5.isEmpty()) {

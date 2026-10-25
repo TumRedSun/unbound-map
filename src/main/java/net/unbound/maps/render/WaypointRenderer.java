@@ -73,17 +73,13 @@ public final class WaypointRenderer {
                     continue;
                 }
                 if (!(var15 < -24.0) && !(var17 < -24.0) && !(var15 > var5 * 2.0 + 24.0) && !(var17 > var7 * 2.0 + 24.0)) {
-                    int var19 = (int)var15;
-                    int var20 = (int)var17;
-                    var0.fill(var19 - 3, var20 - 3, var19 + 3, var20 + 3, var14.colorARGB);
-                    var0.renderOutline(var19 - 4, var20 - 4, var19 + 4, var20 + 4, var14.beacon ? -1258291201 : -267382764);
+                    int var19 = Mth.floor(var15);
+                    int var20 = Mth.floor(var17);
+                    var0.fill(var19 - 2, var20 - 2, var19 + 3, var20 + 3, -267382764);
+                    var0.fill(var19 - 1, var20 - 1, var19 + 2, var20 + 2, var14.colorARGB);
+                    var0.renderOutline(var19 - 3, var20 - 3, var19 + 4, var20 + 4, -267382764);
                     String var21 = var14.name + " (" + (int)Math.sqrt(dist2(var14, var1, var3)) + " m)";
-                    PoseStack var22 = var0.pose();
-                    var22.pushPose();
-                    var22.translate(var15, var17 - 14.0, 0.0);
-                    var22.scale(0.75F, 0.75F, 1.0F);
-                    var0.drawString(var12, var21, -var12.width(var21) / 2, 0, -1, true);
-                    var22.popPose();
+                    var0.drawString(var12, var21, var19 - var12.width(var21) / 2, var20 - 12, -1, true);
                 }
             }
         }

@@ -10,6 +10,11 @@ import net.minecraft.client.renderer.GameRenderer;
 import net.minecraft.resources.ResourceLocation;
 import org.joml.Matrix4f;
 
+/**
+ * Minimal drawing helpers. Everything above the map is drawn with axis-aligned
+ * quads (same vertex order as GuiGraphics.fill) or four-point polygons, so no
+ * custom triangle winding can ever be culled or rendered inconsistently.
+ */
 public final class DrawHelper {
     private DrawHelper() {
     }
@@ -37,13 +42,20 @@ public final class DrawHelper {
         BufferUploader.drawWithShader(var6.buildOrThrow());
     }
 
-    public static void coloredTriangle(Matrix4f var0, float var1, float var2, float var3, float var4, float var5, float var6, int var7) {
+    /**
+     * Draws a convex four-point polygon (given clockwise in GUI coordinates,
+     * where Y grows downward - the same orientation GuiGraphics.fill uses).
+     */
+    public static void poly4(Matrix4f var0, float[] var1, int var2) {
         RenderSystem.setShader(GameRenderer::getPositionColorShader);
-        BufferBuilder var8 = Tesselator.getInstance().begin(Mode.TRIANGLES, DefaultVertexFormat.POSITION_COLOR);
-        addColored(var8, var0, var1, var2, var7);
-        addColored(var8, var0, var3, var4, var7);
-        addColored(var8, var0, var5, var6, var7);
-        BufferUploader.drawWithShader(var8.buildOrThrow());
+        RenderSystem.disableCull();
+        BufferBuilder var3 = Tesselator.getInstance().begin(Mode.QUADS, DefaultVertexFormat.POSITION_COLOR);
+        addColored(var3, var0, var1[0], var1[1], var2);
+        addColored(var3, var0, var1[2], var1[3], var2);
+        addColored(var3, var0, var1[4], var1[5], var2);
+        addColored(var3, var0, var1[6], var1[7], var2);
+        BufferUploader.drawWithShader(var3.buildOrThrow());
+        RenderSystem.enableCull();
     }
 
     public static void disc(Matrix4f var0, float var1, float var2, float var3, int var4, int var5) {
@@ -74,13 +86,37 @@ public final class DrawHelper {
         BufferUploader.drawWithShader(var7.buildOrThrow());
     }
 
+    /**
+     * The "you are here" arrow (Xaero-style): a white kite with a dark outline
+     * and a soft shadow, pointing along the player's yaw. Built from two
+     * four-point polygons in the proven fill orientation, so it is always
+     * visible regardless of the current cull state.
+     *
+     * @param yaw player rotation; 0 = south (+Z), 90 = west (-X)
+     */
     public static void playerArrow(Matrix4f var0, float var1, float var2, float var3) {
         double var4 = Math.toRadians(var3);
         float var6 = (float)(-Math.sin(var4));
         float var7 = (float)Math.cos(var4);
-        arrowShape(var0, var1, var2, var6, var7, 11.5F, 8.0F, 1711276032);
-        arrowShape(var0, var1, var2, var6, var7, 10.0F, 6.9F, -251657176);
-        arrowShape(var0, var1, var2, var6, var7, 8.0F, 5.4F, -1);
+        float var8 = -var7;
+        float var9 = var6;
+        drawKite(var0, var1, var2, var6, var7, var8, var9, 12.0F, 5.0F, 1.5F, 1711276032);
+        drawKite(var0, var1, var2, var6, var7, var8, var9, 11.0F, 4.6F, 1.0F, -436207616);
+        drawKite(var0, var1, var2, var6, var7, var8, var9, 10.0F, 4.2F, 0.0F, -1);
+    }
+
+    private static void drawKite(
+        Matrix4f var0, float var1, float var2, float var3, float var4, float var5, float var6, float var7, float var8, float var9, int var10
+    ) {
+        float var11 = var1 + var3 * var7;
+        float var12 = var2 + var4 * var7;
+        float var13 = var1 - var3 * var9;
+        float var14 = var2 - var4 * var9;
+        float var15 = var1 - var5 * var8;
+        float var16 = var2 - var6 * var8;
+        float var17 = var1 + var5 * var8;
+        float var18 = var2 + var6 * var8;
+        poly4(var0, new float[]{var11, var12, var15, var16, var13, var14, var17, var18}, var10);
     }
 
     /** Rectangle outline drawn as four thin quads, crisp at any zoom. */
@@ -99,13 +135,6 @@ public final class DrawHelper {
         addColored(var0, var1, var2, var5, var6);
         addColored(var0, var1, var4, var5, var6);
         addColored(var0, var1, var4, var3, var6);
-    }
-
-    private static void arrowShape(Matrix4f var0, float var1, float var2, float var3, float var4, float var5, float var6, int var7) {
-        double var8 = Math.toRadians(140.0);
-        float var10 = (float)(var3 * Math.cos(var8) - var4 * Math.sin(var8));
-        float var11 = (float)(var3 * Math.sin(var8) + var4 * Math.cos(var8));
-        coloredTriangle(var0, var1 + var3 * var5, var2 + var4 * var5, var1 + var10 * var6, var2 + var11 * var6, var1 - var10 * var6, var2 - var11 * var6, var7);
     }
 
     private static void addColored(BufferBuilder var0, Matrix4f var1, float var2, float var3, int var4) {

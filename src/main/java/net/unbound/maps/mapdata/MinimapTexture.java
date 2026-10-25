@@ -65,7 +65,7 @@ public final class MinimapTexture {
         if (var1.player != null) {
             int var2 = Mth.floor(var1.player.getX());
             int var3 = Mth.floor(var1.player.getZ());
-            MapTileCache.updateCaveBucket(var1.player.getBlockY());
+            MapTileCache.onCaveViewChanged();
             if (Math.abs(var2 - (anchorX + 256)) > 128 || Math.abs(var3 - (anchorZ + 256)) > 128) {
                 anchorX = var2 - 256;
                 anchorZ = var3 - 256;
@@ -101,7 +101,7 @@ public final class MinimapTexture {
             if (!dirtyChunks.isEmpty()) {
                 long[] var22 = dirtyChunks.toLongArray();
                 dirtyChunks.clear();
-                boolean slice = MapTileCache.isMinimapSlice();
+                boolean slice = MapTileCache.isCave();
                 int var24 = slice ? 24 : Integer.MAX_VALUE;
                 int var26 = 0;
                 NativeImage var28 = texture.getPixels();

@@ -29,10 +29,13 @@ and it does not pretend to be them. Addons should integrate through the stable p
   configurable in the client config, e.g. `/tp @s {x} {y} {z}` or an `/execute in` variant)
 - World map info bar: coordinates, chunk, **the block/fluid under the cursor and the
   biome of that chunk**
-- **Automatic cave mode** (Xaero-style): switches to the slice view when your eyes go
-  below the solid terrain surface — swimming *on* water keeps the top view, diving or
-  mining switches to the slice. Manual `C` toggle overrides the automation for a few
-  seconds; the slice range is configurable
+- **Cave mode with a height slider** (Xaero-style): the slider on the world map picks
+  the viewed height — the leftmost position is **Auto**, where the map shows the surface
+  while your eyes are above the solid terrain (OCEAN_FLOOR heightmap: swimming *on*
+  water keeps the top view) and switches to a slice that follows the player while
+  mining or diving. Any other position pins both maps to one fixed Y level. `C`
+  toggles between Auto and "pin at my height", `,` / `.` (or the left / right arrow
+  keys on the world map) step the height by 8 blocks; the slice range is configurable
 - **Persistent explored map** per server/world and per dimension: chunk colors and
   heights are saved to region files (gzip), the list of seen biomes and blocks goes to
   a readable `discovery.json`; unexplored-but-unloaded chunks keep rendering from the
