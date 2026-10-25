@@ -2,19 +2,26 @@ package net.unbound.maps.screen;
 
 import com.mojang.blaze3d.systems.RenderSystem;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Locale;
 import java.util.UUID;
 import net.minecraft.Util;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphics;
+import net.minecraft.client.gui.components.EditBox;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.client.resources.language.I18n;
 import net.minecraft.core.BlockPos;
+import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.network.chat.Component;
 import net.minecraft.util.Mth;
 import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.level.chunk.ChunkAccess;
+import net.minecraft.world.level.chunk.LevelChunk;
+import net.minecraft.world.level.chunk.LevelChunkSection;
+import net.minecraft.world.level.chunk.status.ChunkStatus;
 import net.unbound.maps.UnboundConfig;
 import net.unbound.maps.UnboundMapsMod;
 import net.unbound.maps.mapdata.CaveState;
@@ -48,6 +55,12 @@ public class WorldMapScreen extends Screen {
     private boolean draggingSlider;
     private int sliderX;
     private int sliderY;
+    private EditBox searchBox;
+    private boolean searchOpen;
+    private List<WorldMapScreen.SearchHit> searchResults = List.of();
+    private int searchIndex;
+    private String searchStatus;
+    private String lastBlockQuery;
 
     public WorldMapScreen() {
         super(Component.translatable("gui.unboundmaps.worldmap"));
@@ -84,8 +97,6 @@ public class WorldMapScreen extends Screen {
             Matrix4f var17 = var1.pose().last().pose();
             RenderSystem.enableBlend();
             RenderSystem.defaultBlendFunc();
-            float dimFactor = MinimapHud.mapDim(var5);
-            RenderSystem.setShaderColor(dimFactor, dimFactor, dimFactor, 1.0F);
 
             for (int var18 = var15; var18 <= var16; var18++) {
                 for (int var19 = var13; var19 <= var14; var19++) {
@@ -111,7 +122,6 @@ public class WorldMapScreen extends Screen {
                 }
             }
 
-            RenderSystem.setShaderColor(1.0F, 1.0F, 1.0F, 1.0F);
             RenderSystem.enableBlend();
             RenderSystem.defaultBlendFunc();
             if (var2 >= 0 && var3 >= 0 && var2 < var6 && var3 < var7) {
@@ -133,6 +143,7 @@ public class WorldMapScreen extends Screen {
             }
 
             WaypointRenderer.drawWorldMapMarkers(var1, this.centerX, this.centerZ, var6 / 2.0, var7 / 2.0, this.blocksPerPixel);
+            this.renderSearchResults(var1);
             EntityRadar.drawWorldMap(var1, this.centerX, this.centerZ, var6, var7, this.blocksPerPixel, var5.player);
             RenderSystem.disableBlend();
         }
@@ -147,6 +158,10 @@ public class WorldMapScreen extends Screen {
         super.render(var1, var2, var3, var4);
         if (this.menu != null) {
             this.renderMenu(var1, var2, var3);
+        }
+
+        if (this.searchOpen && this.searchStatus != null) {
+            var1.drawString(var5.font, this.searchStatus, 10, 30, -1643021, true);
         }
     }
 
@@ -406,6 +421,17 @@ public class WorldMapScreen extends Screen {
     }
 
     public boolean mouseClicked(double var1, double var3, int var5) {
+        if (this.searchOpen) {
+            if (var5 == 0 && this.searchBox != null && var1 >= 6.0 && var1 < 272.0 && var3 >= 6.0 && var3 < 28.0) {
+                return super.mouseClicked(var1, var3, var5);
+            }
+
+            if (var5 == 1) {
+                this.closeSearch();
+                return true;
+            }
+        }
+
         if (var5 == 0 && this.menu == null && this.overSlider(var1, var3)) {
             this.draggingSlider = true;
             this.applySlider(var1);
@@ -459,7 +485,22 @@ public class WorldMapScreen extends Screen {
     }
 
     public boolean keyPressed(int var1, int var2, int var3) {
-        if (var1 == 77) {
+        if (this.searchOpen) {
+            if (var1 == 256) {
+                this.closeSearch();
+                return true;
+            }
+
+            if (var1 == 257 || var1 == 335) {
+                this.doSearch(true);
+                return true;
+            }
+
+            return this.searchBox.keyPressed(var1, var2, var3) || super.keyPressed(var1, var2, var3) || true;
+        } else if (var1 == 70 && Screen.hasControlDown()) {
+            this.openSearch();
+            return true;
+        } else if (var1 == 77) {
             this.onClose();
             return true;
         } else if (var1 == 66) {
@@ -479,6 +520,294 @@ public class WorldMapScreen extends Screen {
         }
     }
 
+    /** Ctrl+F: opens the waypoint/block search bar in the top-left corner. */
+    private void openSearch() {
+        if (!this.searchOpen) {
+            if (this.searchBox == null) {
+                this.searchBox = new EditBox(this.font, 8, 8, 260, 18, Component.translatable("gui.unboundmaps.search"));
+                this.searchBox.setMaxLength(128);
+                this.searchBox.setHint(Component.translatable("gui.unboundmaps.searchHint"));
+                this.searchBox.setResponder(var0 -> this.liveSearch());
+            }
+
+            this.addRenderableWidget(this.searchBox);
+            this.searchBox.setValue("");
+            this.searchResults = List.of();
+            this.searchStatus = null;
+            this.searchOpen = true;
+            this.setInitialFocus(this.searchBox);
+        }
+    }
+
+    private void closeSearch() {
+        if (this.searchOpen) {
+            this.removeWidget(this.searchBox);
+            this.searchOpen = false;
+            this.searchResults = List.of();
+            this.searchStatus = null;
+        }
+    }
+
+    /** Live update while typing: instant for waypoints, blocks wait for Enter (their scan is heavier). */
+    private void liveSearch() {
+        if (!this.searchOpen) {
+            return;
+        }
+        String var1 = this.searchBox.getValue().trim();
+        if (var1.isEmpty()) {
+            this.searchResults = List.of();
+            this.searchStatus = null;
+            return;
+        }
+
+        String var2 = var1.toLowerCase(Locale.ROOT);
+        if (var2.startsWith("block/") || var2.startsWith("\u0431\u043b\u043e\u043a/")) {
+            this.searchStatus = I18n.get("gui.unboundmaps.searchEnter");
+        } else {
+            String var3;
+            if (var2.startsWith("way/")) {
+                var3 = var1.substring(4).trim();
+            } else if (var2.startsWith("wp/")) {
+                var3 = var1.substring(3).trim();
+            } else if (var2.startsWith("waypoint/")) {
+                var3 = var1.substring(9).trim();
+            } else if (var2.startsWith("\u043c\u0435\u0442\u043a\u0430/")) {
+                var3 = var1.substring(6).trim();
+            } else {
+                var3 = var1;
+            }
+
+            this.searchWaypoints(var3, false);
+        }
+    }
+
+    private void doSearch(boolean var1) {
+        if (this.searchOpen) {
+            String var2 = this.searchBox.getValue().trim();
+            if (!var2.isEmpty()) {
+                String var3 = var2.toLowerCase(Locale.ROOT);
+                String var4;
+                if (var3.startsWith("block/")) {
+                    var4 = var2.substring(6).trim();
+                } else if (var3.startsWith("\u0431\u043b\u043e\u043a/")) {
+                    var4 = var2.substring(5).trim();
+                } else if (var3.startsWith("way/")) {
+                    var4 = var2.substring(4).trim();
+                } else if (var3.startsWith("wp/")) {
+                    var4 = var2.substring(3).trim();
+                } else if (var3.startsWith("waypoint/")) {
+                    var4 = var2.substring(9).trim();
+                } else if (var3.startsWith("\u043c\u0435\u0442\u043a\u0430/")) {
+                    var4 = var2.substring(6).trim();
+                } else {
+                    var4 = var2;
+                }
+
+                if (var3.startsWith("block/") || var3.startsWith("\u0431\u043b\u043e\u043a/")) {
+                    this.searchBlocks(var4, var1);
+                } else {
+                    this.searchWaypoints(var4, var1);
+                }
+            }
+        }
+    }
+
+    private void searchWaypoints(String var1, boolean var2) {
+        List<WorldMapScreen.SearchHit> var3 = new ArrayList<>();
+        String var4 = var1.toLowerCase(Locale.ROOT);
+
+        for (Waypoint var6 : WaypointManager.currentWaypoints()) {
+            if (var4.isEmpty() || var6.name.toLowerCase(Locale.ROOT).contains(var4)) {
+                var3.add(new WorldMapScreen.SearchHit(var6.x, var6.y, var6.z, var6.name, var6.colorARGB | 0xFF000000));
+            }
+        }
+
+        var3.sort(Comparator.comparingDouble(this::hitDist2));
+        this.searchResults = var3;
+        if (var3.isEmpty()) {
+            this.searchIndex = 0;
+            this.searchStatus = var1.isEmpty() ? null : I18n.get("gui.unboundmaps.searchNoResults");
+        } else {
+            if (var2) {
+                this.searchIndex = (this.searchIndex + 1) % var3.size();
+            } else {
+                this.searchIndex = 0;
+            }
+
+            WorldMapScreen.SearchHit var7 = var3.get(this.searchIndex);
+            this.searchStatus = I18n.get("gui.unboundmaps.searchFound", var3.size())
+                + " \u2014 "
+                + var7.label()
+                + " ("
+                + (this.searchIndex + 1)
+                + "/"
+                + var3.size()
+                + ")";
+            this.centerOn(var7.x(), var7.z());
+        }
+    }
+
+    private void searchBlocks(String var1, boolean var2) {
+        if (var1.isEmpty()) {
+            return;
+        }
+        if (var2 && var1.equals(this.lastBlockQuery) && !this.searchResults.isEmpty()) {
+            this.searchIndex = (this.searchIndex + 1) % this.searchResults.size();
+            WorldMapScreen.SearchHit var3 = this.searchResults.get(this.searchIndex);
+            this.searchStatus = I18n.get("gui.unboundmaps.searchFound", this.searchResults.size())
+                + " \u2014 "
+                + var3.label()
+                + " ("
+                + (this.searchIndex + 1)
+                + "/"
+                + this.searchResults.size()
+                + ")";
+            this.centerOn(var3.x(), var3.z());
+            return;
+        }
+
+        ClientLevel var9 = this.minecraft.level;
+        if (var9 == null) {
+            return;
+        }
+        this.lastBlockQuery = var1;
+        String var4 = var1.toLowerCase(Locale.ROOT);
+        List<WorldMapScreen.SearchHit> var5 = new ArrayList<>();
+        Minecraft var13 = this.minecraft;
+        int var6 = 8;
+        try {
+            var6 = var13.options.renderDistance().get();
+        } catch (Exception var14a) {
+        }
+
+        int var7 = var13.player != null ? Mth.floor(var13.player.getX()) >> 4 : Mth.floor(this.centerX) >> 4;
+        int var8 = var13.player != null ? Mth.floor(var13.player.getZ()) >> 4 : Mth.floor(this.centerZ) >> 4;
+        int var10 = var9.getMinBuildHeight();
+        outer:
+
+        for (int ring = 0; ring <= var6; ring++) {
+            for (int dx = -ring; dx <= ring; dx++) {
+                for (int dz = -ring; dz <= ring; dz++) {
+                    if (Math.max(Math.abs(dx), Math.abs(dz)) == ring) {
+                        ChunkAccess var11 = var9.getChunk(var7 + dx, var8 + dz, ChunkStatus.FULL, false);
+                        if (var11 instanceof LevelChunk chunk) {
+                            LevelChunkSection[] var12 = chunk.getSections();
+                            int var14 = chunk.getPos().x << 4;
+                            int var15 = chunk.getPos().z << 4;
+
+                            for (int var16 = 0; var16 < var12.length; var16++) {
+                                LevelChunkSection var17 = var12[var16];
+                                if (var17 != null && !var17.hasOnlyAir() && var17.maybeHas(var0 -> this.blockMatches(var0.getBlock(), var4))) {
+                                    int var18 = var10 + (var16 << 4);
+
+                                    for (int var19 = 15; var19 >= 0; var19--) {
+                                        for (int var20 = 0; var20 < 16; var20++) {
+                                            for (int var21 = 0; var21 < 16; var21++) {
+                                                BlockState var22 = var17.getBlockState(var21, var19, var20);
+                                                if (this.blockMatches(var22.getBlock(), var4)) {
+                                                    var5.add(new WorldMapScreen.SearchHit(
+                                                        var14 + var21,
+                                                        var18 + var19,
+                                                        var15 + var20,
+                                                        var22.getBlock().getName().getString(),
+                                                        -11534136
+                                                    ));
+                                                    if (var5.size() >= 512) {
+                                                        break outer;
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        var5.sort(Comparator.comparingDouble(this::hitDist2));
+        this.searchResults = var5;
+        if (var5.isEmpty()) {
+            this.searchIndex = 0;
+            this.searchStatus = I18n.get("gui.unboundmaps.searchNoResults");
+        } else {
+            this.searchIndex = 0;
+            WorldMapScreen.SearchHit var20 = var5.get(0);
+            this.searchStatus = I18n.get("gui.unboundmaps.searchFound", var5.size())
+                + (var5.size() >= 512 ? "+" : "")
+                + " \u2014 "
+                + var20.label()
+                + " ["
+                + var20.x()
+                + ", "
+                + var20.y()
+                + ", "
+                + var20.z()
+                + "]";
+            this.centerOn(var20.x(), var20.z());
+        }
+    }
+
+    /** Matches a block against the query: registry id (mod:block), translation key or localized name. */
+    private boolean blockMatches(net.minecraft.world.level.block.Block var1, String var2) {
+        try {
+            if (BuiltInRegistries.BLOCK.getKey(var1).toString().contains(var2)) {
+                return true;
+            }
+
+            String var3 = var1.getDescriptionId();
+            if (var3.toLowerCase(Locale.ROOT).contains(var2)) {
+                return true;
+            }
+
+            return var1.getName().getString().toLowerCase(Locale.ROOT).contains(var2);
+        } catch (Exception var4) {
+            return false;
+        }
+    }
+
+    private double hitDist2(WorldMapScreen.SearchHit var1) {
+        double var2 = this.minecraft.player != null ? this.minecraft.player.getX() - var1.x() : 0.0;
+        double var4 = this.minecraft.player != null ? this.minecraft.player.getZ() - var1.z() : 0.0;
+        return var2 * var2 + var4 * var4;
+    }
+
+    private void centerOn(int var1, int var2) {
+        this.centerX = var1 + 0.5;
+        this.centerZ = var2 + 0.5;
+    }
+
+    private void renderSearchResults(GuiGraphics var1) {
+        if (!this.searchResults.isEmpty()) {
+            Matrix4f var2 = var1.pose().last().pose();
+            float var3 = (float)(Math.sin((double)Util.getMillis() / 180.0) * 0.5 + 0.5);
+            int var4 = 0;
+
+            for (int var5 = 0; var5 < this.searchResults.size() && var4 < 48; var5++) {
+                WorldMapScreen.SearchHit var6 = this.searchResults.get(var5);
+                float var7 = (float)(this.width / 2.0 + (var6.x() + 0.5 - this.centerX) / this.blocksPerPixel);
+                float var8 = (float)(this.height / 2.0 + (var6.z() + 0.5 - this.centerZ) / this.blocksPerPixel);
+                if (var7 >= -12.0F && var8 >= -12.0F && var7 <= (float)this.width + 12.0F && var8 <= (float)this.height + 12.0F) {
+                    var4++;
+                    float var9 = 5.0F + var3 * 2.0F + (var5 == this.searchIndex ? 3.0F : 0.0F);
+                    DrawHelper.ring(var2, var7, var8, var9, var9 + 2.0F, 24, var5 == this.searchIndex ? -1 : var6.color());
+                    if (var5 == this.searchIndex) {
+                        var1.drawString(
+                            this.font,
+                            var6.label() + " [" + var6.x() + ", " + var6.y() + ", " + var6.z() + "]",
+                            (int)var7 - this.font.width(var6.label()) / 2,
+                            (int)var8 - 14,
+                            -1,
+                            true
+                        );
+                    }
+                }
+            }
+        }
+    }
+
     public void onClose() {
         WaypointManager.saveNow();
         super.onClose();
@@ -486,6 +815,9 @@ public class WorldMapScreen extends Screen {
 
     public boolean isPauseScreen() {
         return false;
+    }
+
+    private record SearchHit(int x, int y, int z, String label, int color) {
     }
 
     private static final class Menu {

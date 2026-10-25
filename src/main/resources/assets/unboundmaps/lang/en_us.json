@@ -22,7 +22,7 @@
   "gui.unboundmaps.beacon.off": "Beacon: OFF",
   "gui.unboundmaps.deathpoint": "Death",
   "gui.unboundmaps.defaultName": "Waypoint",
-  "gui.unboundmaps.hint": "Drag: pan | Scroll: zoom | RMB: menu (on a marker: edit/delete) | Double-click: new waypoint | B: waypoint list | C: cave mode | , .: height | M/Esc: close",
+  "gui.unboundmaps.hint": "Drag: pan | Scroll: zoom | RMB: menu (on a marker: edit/delete) | Double-click: new waypoint | B: waypoint list | C: cave mode | , .: height | Ctrl+F: search | M/Esc: close",
   "gui.unboundmaps.noWaypoints": "No waypoints in this dimension yet. Press 'New waypoint'.",
   "gui.unboundmaps.invalidCoords": "X, Y and Z must be integers",
   "gui.unboundmaps.chunk": "Chunk",
@@ -33,5 +33,10 @@
   "gui.unboundmaps.menuEdit": "Edit waypoint",
   "gui.unboundmaps.menuDelete": "Delete waypoint",
   "gui.unboundmaps.menuTeleport": "Teleport here",
-  "gui.unboundmaps.teleportSent": "[Unbound Maps] Sent: /%s"
+  "gui.unboundmaps.teleportSent": "[Unbound Maps] Sent: /%s",
+  "gui.unboundmaps.search": "Search",
+  "gui.unboundmaps.searchHint": "way/<name>  or  block/<name or mod:block>",
+  "gui.unboundmaps.searchNoResults": "Nothing found",
+  "gui.unboundmaps.searchFound": "Found: %s",
+  "gui.unboundmaps.searchEnter": "Press Enter to search blocks (loaded chunks)"
 }

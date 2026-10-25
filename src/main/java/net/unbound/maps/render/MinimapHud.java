@@ -30,18 +30,6 @@ public final class MinimapHud {
     private MinimapHud() {
     }
 
-    /** Xaero-style night dimming factor for map tiles (1.0 at day, ~0.55 at night). */
-    public static float mapDim(Minecraft var0) {
-        try {
-            if (var0.level != null && UnboundConfig.NIGHT_DIM.get()) {
-                return 1.0F - 0.45F * (float)var0.level.getSkyDarken() / 15.0F;
-            }
-        } catch (NullPointerException | IllegalStateException var1) {
-        }
-
-        return 1.0F;
-    }
-
     public static void zoomIn() {
         if (zoomIndex > 0) {
             zoomIndex--;
@@ -74,14 +62,11 @@ public final class MinimapHud {
                 Matrix4f var17 = var0.pose().last().pose();
                 RenderSystem.enableBlend();
                 RenderSystem.defaultBlendFunc();
-                float dimFactor = mapDim(var2);
-                RenderSystem.setShaderColor(dimFactor, dimFactor, dimFactor, 1.0F);
                 if (var9) {
                     renderSquare(var0, var17, var6, var7, var5, var8, var10, var12, var14, var15, var16);
                 } else {
                     renderRound(var17, var6, var7, var5, var8, var10, var12, var14, var15, var16);
                 }
-                RenderSystem.setShaderColor(1.0F, 1.0F, 1.0F, 1.0F);
 
                 var0.drawString(var2.font, "N", var6 - var2.font.width("N") / 2, var7 - var5 - 11, -4668212, true);
                 WaypointRenderer.drawMinimapMarkers(var0, var6, var7, var5, var8, var10, var12, var9);

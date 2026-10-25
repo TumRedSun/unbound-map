@@ -22,7 +22,7 @@
   "gui.unboundmaps.beacon.off": "Маяк: ВЫКЛ",
   "gui.unboundmaps.deathpoint": "Смерть",
   "gui.unboundmaps.defaultName": "Точка",
-  "gui.unboundmaps.hint": "Перетаскивание: движение | Колесо: зум | ПКМ: меню (у точки: изм./удал.) | Двойной клик: новая точка | B: список точек | C: пещеры | , .: высота | M/Esc: закрыть",
+  "gui.unboundmaps.hint": "Перетаскивание: движение | Колесо: зум | ПКМ: меню (у точки: изм./удал.) | Двойной клик: новая точка | B: список точек | C: пещеры | , .: высота | Ctrl+F: поиск | M/Esc: закрыть",
   "gui.unboundmaps.noWaypoints": "В этом измерении пока нет точек. Нажмите «Новая точка».",
   "gui.unboundmaps.invalidCoords": "X, Y и Z должны быть целыми числами",
   "gui.unboundmaps.chunk": "Чанк",
@@ -33,5 +33,10 @@
   "gui.unboundmaps.menuEdit": "Изм. точку",
   "gui.unboundmaps.menuDelete": "Удалить точку",
   "gui.unboundmaps.menuTeleport": "Телепорт сюда",
-  "gui.unboundmaps.teleportSent": "[Unbound Maps] Отправлено: /%s"
+  "gui.unboundmaps.teleportSent": "[Unbound Maps] Отправлено: /%s",
+  "gui.unboundmaps.search": "Поиск",
+  "gui.unboundmaps.searchHint": "way/<имя>  или  block/<блок или мод:блок>",
+  "gui.unboundmaps.searchNoResults": "Ничего не найдено",
+  "gui.unboundmaps.searchFound": "Найдено: %s",
+  "gui.unboundmaps.searchEnter": "Нажмите Enter для поиска блоков (по загруженным чанкам)"
 }

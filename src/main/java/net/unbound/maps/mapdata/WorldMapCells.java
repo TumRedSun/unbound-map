@@ -24,7 +24,13 @@ public final class WorldMapCells {
     }
 
     public static WorldMapCells.Cell cell(int var0, int var1) {
-        return CELLS.get(new WorldMapCells.CellKey(var0, var1, MapTileCache.isCave(), MapTileCache.caveBucket()));
+        return CELLS.get(new WorldMapCells.CellKey(var0, var1, MapTileCache.isCave(), MapTileCache.caveBucket(), darken()));
+    }
+
+    /** Current sky darkness level (0 = day, 15 = night): part of the cell key so tiles re-bake with the day cycle. */
+    private static int darken() {
+        ClientLevel var0 = Minecraft.getInstance().level;
+        return var0 != null ? var0.getSkyDarken() : 0;
     }
 
     public static void clearAll() {
@@ -55,6 +61,7 @@ public final class WorldMapCells {
     public static void ensureVisible(ClientLevel var0, double var1, double var3, int var5, int var6, double var7) {
         boolean var9 = MapTileCache.isCave();
         int var10 = MapTileCache.caveBucket();
+        int var20 = darken();
         int var11 = Math.floorDiv(floor(var1 - var5 * var7 / 2.0), 512);
         int var12 = Math.floorDiv(floor(var1 + var5 * var7 / 2.0), 512);
         int var13 = Math.floorDiv(floor(var3 - var6 * var7 / 2.0), 512);
@@ -62,7 +69,7 @@ public final class WorldMapCells {
 
         for (int var15 = var13; var15 <= var14; var15++) {
             for (int var16 = var11; var16 <= var12; var16++) {
-                WorldMapCells.CellKey var17 = new WorldMapCells.CellKey(var16, var15, var9, var10);
+                WorldMapCells.CellKey var17 = new WorldMapCells.CellKey(var16, var15, var9, var10, var20);
                 if (!CELLS.containsKey(var17)) {
                     CELLS.put(var17, createCell(var0, var16, var15, var9, var10));
                     evictOld();
@@ -173,6 +180,6 @@ public final class WorldMapCells {
         }
     }
 
-    private record CellKey(int cellX, int cellZ, boolean cave, int bucket) {
+    private record CellKey(int cellX, int cellZ, boolean cave, int bucket, int darken) {
     }
 }

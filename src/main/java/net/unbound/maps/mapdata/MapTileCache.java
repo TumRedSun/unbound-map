@@ -4,6 +4,7 @@ import java.util.HashMap;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.BlockPos.MutableBlockPos;
@@ -18,6 +19,7 @@ import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.chunk.status.ChunkStatus;
 import net.minecraft.world.level.levelgen.Heightmap.Types;
 import net.minecraft.world.level.material.FluidState;
+import net.minecraft.world.level.chunk.LevelChunkSection;
 import net.minecraft.world.level.material.MapColor;
 import net.unbound.maps.UnboundConfig;
 
@@ -25,18 +27,19 @@ import net.unbound.maps.UnboundConfig;
  * Computes and caches the 16x16 color tiles for both the minimap and the world map.
  *
  * Surface tiles: WORLD_SURFACE heightmap + block map color, with optional
- * biome tinting (grass/foliage/water), light shading and cross-chunk hillshading.
- * Slice (cave) tiles: the topmost non-air block in the player's altitude bucket,
- * shaded by exposure, depth and block light.
+ * biome tinting (grass/foliage/water), dynamic light shading (block light from
+ * torches/lava/glowstone glows at night, sky light follows the day cycle) and
+ * cross-chunk hillshading.
+ * Slice (cave) tiles: Xaero-style "cut lid" view. Everything above the view
+ * height is treated as removed; the first non-air block below it (a cave floor,
+ * a ravine bottom, lava) is rendered at any depth, lit by the light inside the
+ * cavity itself, with 16 perceptual light gradations.
  *
  * Final tiles are recorded in {@link MapStore} so explored-but-unloaded chunks
  * keep rendering from disk.
  */
 public final class MapTileCache {
     public static final int UNKNOWN = -15723752;
-    public static final float SLICE_SHADE = 0.88F;
-    private static final float SLICE_EXPOSED = 1.12F;
-    private static final float SLICE_BURIED = 0.66F;
     private static final int MAX_ENTRIES = 40000;
     private static final int MAX_SLICE_ENTRIES = 8000;
     private static final int SLICE_BUCKET_BITS = 3;
@@ -44,6 +47,13 @@ public final class MapTileCache {
     private static final Map<Integer, Map<Long, MapTileCache.Entry>> SLICES = new HashMap<>();
     private static boolean cave;
     private static int sliceBucket;
+    /** 16 perceptual light gradations: caves and torch-lit areas get many distinguishable steps. */
+    private static final float[] LIGHT_CURVE = {
+        0.10F, 0.13F, 0.16F, 0.19F, 0.22F, 0.25F, 0.29F, 0.33F,
+        0.38F, 0.43F, 0.49F, 0.56F, 0.64F, 0.73F, 0.85F, 1.00F
+    };
+    private static int lastDarken = -1;
+    private static boolean nightDim = true;
 
     private MapTileCache() {
     }
@@ -74,6 +84,50 @@ public final class MapTileCache {
             sliceBucket = bucket;
             SLICES.clear();
             MinimapTexture.invalidateAll();
+        }
+
+        // Dynamic day/night: when the sky darkness level changes, surface tiles
+        // are re-baked so the map brightens at dawn and darkens at dusk while
+        // torch/lava light keeps glowing. Slice tiles are block-light driven
+        // and are intentionally not re-scanned here.
+        nightDim = flag(UnboundConfig.NIGHT_DIM, true);
+        Minecraft mc = Minecraft.getInstance();
+        if (mc.level != null) {
+            int darken = mc.level.getSkyDarken();
+            if (darken != lastDarken) {
+                lastDarken = darken;
+                CHUNKS.clear();
+                MinimapTexture.invalidateAll();
+            }
+        }
+    }
+
+    /**
+     * Xaero-like "living" light: block light (torches, lava, glowstone) always
+     * keeps its glow, sky light is scaled by the current day/night level.
+     */
+    private static float lightShade(ClientLevel var0, int var1, int var2, boolean var3) {
+        float var4 = LIGHT_CURVE[var2 & 15];
+        float var5 = LIGHT_CURVE[var1 & 15];
+        if (var3 && nightDim) {
+            var5 *= 1.0F - 0.72F * (float)var0.getSkyDarken() / 15.0F;
+        }
+
+        return Math.max(0.10F, Math.max(var4, var5));
+    }
+
+    /** Applies per-pixel light to a finished entry. {@code dynamic=false} bakes the daylight look (used for the persistent store). */
+    private static void applyLight(ClientLevel var0, int var1, int var2, MapTileCache.Entry var3, boolean var4) {
+        int var5 = var0.getMinBuildHeight();
+        MutableBlockPos var6 = new MutableBlockPos();
+
+        for (int var7 = 0; var7 < 256; var7++) {
+            if (var3.colors[var7] != UNKNOWN) {
+                var6.set((var1 << 4) + (var7 & 15), Math.max(var3.heights[var7] - 1, var5), (var2 << 4) + (var7 >> 4));
+                int var8 = var0.getBrightness(LightLayer.SKY, var6);
+                int var9 = var0.getBrightness(LightLayer.BLOCK, var6);
+                var3.colors[var7] = shadeAbgr(var3.colors[var7], lightShade(var0, var8, var9, var4));
+            }
         }
     }
 
@@ -264,13 +318,6 @@ public final class MapTileCache {
                                 var19 = shadeAbgr(var19, Math.max(0.45F, 1.0F - var23 * 0.07F));
                             }
 
-                            if (var30) {
-                                int var25 = var0.getBrightness(LightLayer.SKY, var12);
-                                int var26 = var0.getBrightness(LightLayer.BLOCK, var12);
-                                int var27 = Math.max(var25, var26);
-                                var19 = shadeAbgr(var19, 0.35F + 0.65F * (float)var27 / 15.0F);
-                            }
-
                             var32[var15] = var19;
                         }
                     }
@@ -282,7 +329,18 @@ public final class MapTileCache {
                 shadeEntry(var0, var1, var2, var34);
             }
 
-            if (var31) {
+            boolean var35 = flag(UnboundConfig.LIGHT_SHADING, true);
+            if (var35) {
+                if (var3 && var31) {
+                    // persist the daylight look, so night exploration never bakes
+                    // darkness into the saved map
+                    MapTileCache.Entry var36 = new MapTileCache.Entry(var34.colors.clone(), var34.heights, true, false);
+                    applyLight(var0, var1, var2, var36, false);
+                    recordToStore(var0, var1, var2, var4, var36);
+                }
+
+                applyLight(var0, var1, var2, var34, true);
+            } else if (var3 && var31) {
                 recordToStore(var0, var1, var2, var4, var34);
             }
 
@@ -410,7 +468,7 @@ public final class MapTileCache {
         if (var4 == null) {
             return var3;
         } else {
-            int var5 = sliceTop(var4, var1 & 15, var2 & 15, var3 + sliceRange(), var3 - sliceRange(), var0.getMinBuildHeight(), var0.getMaxBuildHeight());
+            int var5 = sliceTop(var4, var1 & 15, var2 & 15, bucketCenterY(sliceBucket), var0.getMinBuildHeight(), var0.getMaxBuildHeight());
             return var5 == Integer.MIN_VALUE ? var3 : var5;
         }
     }
@@ -422,51 +480,48 @@ public final class MapTileCache {
         } else {
             boolean var29 = flag(UnboundConfig.LIGHT_SHADING, true);
             int var5 = bucketCenterY(var3);
-            int var6 = sliceRange();
-            int var7 = var5 + var6;
-            int var8 = var5 - var6;
+            int var6 = sliceRange() * 2;
+            int var7 = var0.getMinBuildHeight();
+            int var8 = var0.getMaxBuildHeight();
             int[] var9 = new int[256];
             int[] var10 = new int[256];
             int var11 = var1 << 4;
             int var12 = var2 << 4;
-            int var13 = var0.getMaxBuildHeight();
-            MutableBlockPos var14 = new MutableBlockPos();
+            MutableBlockPos var13 = new MutableBlockPos();
 
-            for (int var15 = 0; var15 < 16; var15++) {
-                for (int var16 = 0; var16 < 16; var16++) {
-                    int var17 = var15 << 4 | var16;
-                    int var18 = sliceTop(var4, var16, var15, var7, var8, var0.getMinBuildHeight(), var13);
-                    var9[var17] = var18;
-                    if (var18 == Integer.MIN_VALUE) {
-                        var10[var17] = -15723752;
+            for (int var14 = 0; var14 < 16; var14++) {
+                for (int var15 = 0; var15 < 16; var15++) {
+                    int var16 = var15 << 4 | var14;
+                    int var17 = sliceTop(var4, var14, var15, var5, var7, var8);
+                    var9[var16] = var17;
+                    if (var17 == Integer.MIN_VALUE) {
+                        var10[var16] = -15723752;
                     } else {
-                        var14.set(var11 + var16, var18, var12 + var15);
-                        BlockState var19 = var4.getBlockState(var14);
-                        int var20 = mapColorAbgr(var19.getMapColor(var4, var14));
-                        if (!var19.getFluidState().isEmpty()) {
-                            int var21 = 0;
+                        var13.set(var11 + var14, var17, var12 + var15);
+                        BlockState var18 = var4.getBlockState(var13);
+                        int var19 = mapColorAbgr(var18.getMapColor(var4, var13));
+                        if (!var18.getFluidState().isEmpty()) {
+                            int var20 = 0;
 
-                            for (BlockPos var22 = var14.immutable(); var21 < 12 && !var4.getFluidState(var22).isEmpty(); var21++) {
-                                var22 = var22.below();
+                            for (BlockPos var21 = var13.immutable(); var20 < 12 && !var4.getFluidState(var21).isEmpty(); var20++) {
+                                var21 = var21.below();
                             }
 
-                            var20 = shadeAbgr(var20, Math.max(0.4F, 1.0F - var21 * 0.08F));
-                        } else {
-                            BlockPos var24 = var14.above();
-                            boolean var25 = var24.getY() < var13 && var4.getBlockState(var24).isAir();
-                            var20 = shadeAbgr(var20, var25 ? 1.12F : 0.66F);
+                            var19 = shadeAbgr(var19, Math.max(0.4F, 1.0F - var20 * 0.08F));
                         }
 
-                        var20 = shadeAbgr(var20, 0.88F);
                         if (var29) {
-                            int var26 = Math.max(
-                                var0.getBrightness(LightLayer.SKY, var14), var0.getBrightness(LightLayer.BLOCK, var14)
-                            );
-                            var20 = shadeAbgr(var20, Math.max(0.3F, 0.35F + 0.65F * (float)var26 / 15.0F));
+                            // light inside the cavity itself: torches light the
+                            // cave floor, lava pools glow, dark rooms stay dark
+                            var13.set(var11 + var14, Math.min(var17 + 1, var8 - 1), var12 + var15);
+                            int var22 = var0.getBrightness(LightLayer.SKY, var13);
+                            int var23 = var0.getBrightness(LightLayer.BLOCK, var13);
+                            var19 = shadeAbgr(var19, lightShade(var0, var22, var23, true));
                         }
 
-                        float var27 = 1.0F - Math.min((float)Math.abs(var18 - var5) / ((float)var6 * 1.6F), 1.0F) * 0.25F;
-                        var10[var17] = shadeAbgr(var20, var27);
+                        float var24 = 1.0F
+                            - Math.min((float)Math.abs(var17 - var5) / (float)Math.max(1, var6), 1.0F) * 0.22F;
+                        var10[var16] = shadeAbgr(var19, var24);
                     }
                 }
             }
@@ -475,20 +530,37 @@ public final class MapTileCache {
         }
     }
 
-    private static int sliceTop(ChunkAccess var0, int var1, int var2, int var3, int var4, int var5, int var6) {
-        int var7 = Math.min(var3, var6 - 1);
-        int var8 = Math.max(var4, var5);
-        MutableBlockPos var9 = new MutableBlockPos();
+    /**
+     * The "cut lid" scan: everything above {@code cutY} is treated as removed.
+     * Returns the first non-air block at or below {@code cutY}, scanning all the
+     * way to the world bottom, so cave floors, ravines and lava lakes far below
+     * the view height stay visible. Whole air-only sections are skipped.
+     */
+    private static int sliceTop(ChunkAccess var0, int var1, int var2, int var3, int var4, int var5) {
+        LevelChunkSection[] var6 = var0.getSections();
+        if (var6 == null || var6.length == 0) {
+            return Integer.MIN_VALUE;
+        } else {
+            int var7 = Math.min(var3, var5 - 1);
+            int var8 = Mth.clamp((var7 - var4) >> 4, 0, var6.length - 1);
+            MutableBlockPos var9 = new MutableBlockPos();
 
-        for (int var10 = var7; var10 >= var8; var10--) {
-            var9.set(var1, var10, var2);
-            BlockState var11 = var0.getBlockState(var9);
-            if (!var11.isAir()) {
-                return var10;
+            for (int var10 = var8; var10 >= 0; var10--) {
+                LevelChunkSection var11 = var6[var10];
+                if (var11 != null && !var11.hasOnlyAir()) {
+                    int var12 = var4 + (var10 << 4);
+
+                    for (int var13 = Math.min(var7, var12 + 15); var13 >= var12; var13--) {
+                        var9.set(var1, var13, var2);
+                        if (!var0.getBlockState(var9).isAir()) {
+                            return var13;
+                        }
+                    }
+                }
             }
-        }
 
-        return Integer.MIN_VALUE;
+            return Integer.MIN_VALUE;
+        }
     }
 
     private static void storeWithLimit(Map<Long, MapTileCache.Entry> var0, long var1, MapTileCache.Entry var3, int var4) {

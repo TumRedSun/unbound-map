@@ -68,8 +68,11 @@ public final class UnboundConfig {
         var0.pop();
         var0.push("cave");
         CAVE_RANGE = var0.comment(
-                "Cave mode maps the slice of blocks around the player's",
-                " altitude: this many blocks above and below the eyes.",
+                "Cave mode (Xaero-style 'cut lid' view): everything above the",
+                " view height is removed and the first solid block below it is",
+                " shown at any depth. This value only controls how many blocks",
+                " below the view height keep full brightness before the",
+                " depth fade starts.",
                 " Xaero-style slice, no fair-play restrictions:",
                 " works at any depth, in every dimension."
             )
