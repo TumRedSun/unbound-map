@@ -87,21 +87,20 @@ public final class MinimapHud {
                 WaypointRenderer.drawMinimapMarkers(var0, var6, var7, var5, var8, var10, var12, var9);
                 EntityRadar.draw(var0, var6, var7, var5, var8, var10, var12, var9);
                 DrawHelper.playerArrow(var17, var6, var7, var3.getYRot());
-                var0.flush();
-                boolean var20 = UnboundConfig.SHOW_COORDS.get();
-                boolean var21 = UnboundConfig.SHOW_BIOME.get();
-                boolean var22 = MapTileCache.isCave();
-                int var23 = (var20 ? 1 : 0) + (var21 ? 1 : 0) + (var22 ? 1 : 0);
-                if (var23 > 0) {
-                    int var24 = 2 * var5 + 6;
-                    int var25 = var23 * 10 + 4;
-                    int var26 = Mth.clamp(var6 - var5 - 3, 2, Math.max(2, var0.guiWidth() - var24 - 2));
-                    int var27 = var7 + var5 + 7;
-                    var0.fill(var26, var27, var26 + var24, var27 + var25, -1945104364);
-                    var0.renderOutline(var26, var27, var26 + var24, var27 + var25, 1711276032);
-                    int var28 = var27 + 3;
-                    if (var22) {
-                        String var23c = I18n.get("gui.unboundmaps.caveLabel")
+                boolean var18 = UnboundConfig.SHOW_COORDS.get();
+                boolean var19 = UnboundConfig.SHOW_BIOME.get();
+                boolean var20 = MapTileCache.isCave();
+                int var21 = (var18 ? 1 : 0) + (var19 ? 1 : 0) + (var20 ? 1 : 0);
+                if (var21 > 0) {
+                    int var22 = 2 * var5 + 6;
+                    int var23 = var21 * 10 + 4;
+                    int var24 = var6 - var5 - 3;
+                    int var25 = var7 + var5 + 7;
+                    var0.fill(var24, var25, var24 + var22, var25 + var23, -1945104364);
+                    var0.renderOutline(var24, var25, var22, var23, 1711276032);
+                    int var26 = var25 + 3;
+                    if (var20) {
+                        String var21c = I18n.get("gui.unboundmaps.caveLabel")
                             + ": "
                             + (CaveState.isAuto() ? I18n.get("gui.unboundmaps.caveAuto") : "Y=" + CaveState.fixedY());
                         var0.drawCenteredString(var2.font, var23c, var6, var28, -1727668);
@@ -156,10 +155,10 @@ public final class MinimapHud {
         int var22 = Mth.floor(var14);
         int var23 = Mth.floor(var15);
         int var24 = Mth.floor(var16);
-        int var25 = Mth.floor(var17);
-        var0.renderOutline(var22 - 2, var23 - 2, var24 + 2, var25 + 2, -267382764);
-        var0.renderOutline(var22 - 1, var23 - 1, var24 + 1, var25 + 1, -267382764);
-        var0.renderOutline(var22, var23, var24, var25, -1879048192);
+        // renderOutline takes (x, y, WIDTH, HEIGHT) in 1.21.1
+        var0.renderOutline(var21 - 2, var22 - 2, var23 - var21 + 4, var24 - var22 + 4, -267382764);
+        var0.renderOutline(var21 - 1, var22 - 1, var23 - var21 + 2, var24 - var22 + 2, -267382764);
+        var0.renderOutline(var21, var22, var23 - var21, var24 - var22, -1879048192);
     }
 
     private static void renderRound(

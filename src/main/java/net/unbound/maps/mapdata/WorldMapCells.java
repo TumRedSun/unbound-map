@@ -3,8 +3,7 @@ package net.unbound.maps.mapdata;
 import com.mojang.blaze3d.platform.NativeImage;
 import com.mojang.blaze3d.platform.NativeImage.Format;
 import it.unimi.dsi.fastutil.longs.LongOpenHashSet;
-import java.util.ArrayList;
-import java.util.Comparator;
+import java.util.ArrayDeque;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -19,197 +18,243 @@ import net.minecraft.world.level.ChunkPos;
 import net.unbound.maps.UnboundMapsMod;
 
 /**
- * Baked map tiles ("cells") behind the world map.
+ * Baked texture cells for the world map, Xaero-style.
  *
- * <p>Every cell is a 512x512 texture. Its ground span grows with the LOD
- * stride: {@code span = 512 * stride} blocks, so one texel always covers
- * {@code stride} blocks. Far zoom-out therefore needs far fewer cells
- * (stride 8 = 64x fewer) while the texel stays roughly screen-pixel sized.</p>
+ * <p>Each cell is a 512x512 texture. {@code lod} (level of detail) decides how
+ * many blocks one texel covers: 1 << lod. Zoomed out views pick a higher lod so
+ * only a handful of cells is ever visible and re-baking stays cheap, while the
+ * GPU scales the textures - panning and zooming therefore never re-bake
+ * anything that is already on screen.</p>
  *
- * <p>Perf model (this used to freeze the game at high zoom-out): creating a
- * cell only allocates the texture and queues its chunks center-out, and
- * {@link #ensureVisible} bakes a limited number of chunks per frame, so the
- * map builds progressively like Xaero's instead of stalling. The cell key does
- * NOT include the sky darkness: day/night is a draw-time shader tint, so tiles
- * never re-bake when the sun sets.</p>
+ * <p>Cell creation is budgeted: a cell fills in strip by strip over a few
+ * frames (map data streams in progressively instead of stalling the frame).
+ * Every cell remembers the view mode (surface / cave slice + bucket) it was
+ * baked for and is ONLY ever redrawn in that mode - mixing modes inside one
+ * cell used to show caves "through" mountains.</p>
  */
 public final class WorldMapCells {
     /** Texture side in texels (and in blocks at stride 1). */
     public static final int CELL = 512;
     private static final int MAX_CELLS = 64;
-    /** Cells created per frame: 2 keeps panning smooth even across unexplored space. */
-    private static final int MAX_NEW_CELLS_PER_FRAME = 2;
-    /** Chunk fills shared by all cells per frame. */
-    private static final int MAX_CHUNK_FILLS_PER_FRAME = 128;
+    private static final int MAX_LOD = 5;
+    private static final int STRIP_ROWS = 16;
+    private static final int STRIPS_PER_CELL = CELL / STRIP_ROWS;
+    private static final int FRAME_PIXEL_BUDGET = 98304;
     private static final Map<WorldMapCells.CellKey, WorldMapCells.Cell> CELLS = new LinkedHashMap<>(64, 0.75F, true);
+    private static final ArrayDeque<WorldMapCells.Cell> PENDING = new ArrayDeque<>();
+    private static int currentLod;
 
     private WorldMapCells() {
     }
 
-    /** Ground span of one cell at the given LOD stride, in blocks. */
-    public static int span(int stride) {
-        return CELL * stride;
+    public static class Cell {
+        public final int cellX;
+        public final int cellZ;
+        public final int lod;
+        public final boolean cave;
+        public final int bucket;
+        public final ResourceLocation location;
+        public final DynamicTexture texture;
+        private int nextStrip;
+        private boolean dead;
+        private final LongOpenHashSet dirty = new LongOpenHashSet();
+
+        Cell(int var1, int var2, int var3, boolean var4, int var5, ResourceLocation var6, DynamicTexture var7) {
+            this.cellX = var1;
+            this.cellZ = var2;
+            this.lod = var3;
+            this.cave = var4;
+            this.bucket = var5;
+            this.location = var6;
+            this.texture = var7;
+        }
+    }
+
+    /** Lod for the current zoom: 1 texel = 2^lod blocks, keeps the visible cell count small. */
+    private static int lodFor(double var0) {
+        if (var0 < 1.0) {
+            return 0;
+        }
+        int var2 = Mth.floor((float)(Math.log(var0) / Math.log(2.0)));
+        return Mth.clamp(var2, 0, MAX_LOD);
+    }
+
+    public static int currentLod() {
+        return currentLod;
+    }
+
+    /** Side of one cell in blocks at the current lod. */
+    public static int cellBlocks() {
+        return CELL << currentLod;
     }
 
     public static WorldMapCells.Cell cell(int var0, int var1) {
-        return CELLS.get(new WorldMapCells.CellKey(var0, var1, MapTileCache.isCave(), MapTileCache.caveBucket(), strideFor(currentBpp())));
-    }
-
-    /** Blocks per texture pixel of the active world map view (used for the LOD choice). */
-    private static double currentBpp() {
-        return net.unbound.maps.screen.WorldMapScreen.currentBlocksPerPixel();
-    }
-
-    /**
-     * LOD stride by blocks-per-pixel: when one screen pixel covers several
-     * blocks anyway, sampling every N-th block (one texel per N x N block area)
-     * looks the same while costing N^2 times less per cell.
-     */
-    public static int strideFor(double var0) {
-        if (var0 >= 0.5) {
-            return 1;
-        } else if (var0 >= 0.25) {
-            return 2;
-        } else {
-            return var0 >= 0.125 ? 4 : 8;
-        }
+        return CELLS.get(new WorldMapCells.CellKey(var0, var1, MapTileCache.isCave(), MapTileCache.caveBucket(), currentLod));
     }
 
     public static void clearAll() {
         Minecraft var0 = Minecraft.getInstance();
 
         for (WorldMapCells.Cell var2 : CELLS.values()) {
+            var2.dead = true;
             var0.getTextureManager().release(var2.location);
         }
 
         CELLS.clear();
+        PENDING.clear();
     }
 
     public static void markChunkDirty(long var0) {
-        if (CELLS.isEmpty()) {
-            return;
-        }
-        int var2 = ChunkPos.getX(var0) << 4;
-        int var3 = ChunkPos.getZ(var0) << 4;
+        if (!CELLS.isEmpty()) {
+            int var2 = ChunkPos.getX(var0);
+            int var3 = ChunkPos.getZ(var0);
 
-        for (WorldMapCells.Cell var7 : CELLS.values()) {
-            int var8 = span(var7.stride);
-            if (var2 >= var7.cellX * var8 && var2 < (var7.cellX + 1) * var8
-                && var3 >= var7.cellZ * var8 && var3 < (var7.cellZ + 1) * var8) {
-                var7.dirty.add(var0);
+            for (WorldMapCells.Cell var7 : CELLS.values()) {
+                if (var7.cellX == (var2 >> (5 + var7.lod)) && var7.cellZ == (var3 >> (5 + var7.lod))) {
+                    var7.dirty.add(var0);
+                }
             }
         }
     }
 
     public static void ensureVisible(ClientLevel var0, double var1, double var3, int var5, int var6, double var7) {
+        currentLod = lodFor(var7);
         boolean var9 = MapTileCache.isCave();
         int var10 = MapTileCache.caveBucket();
-        int var20 = strideFor(var7);
-        int var21 = span(var20);
-        double var22 = var1 - var5 * var7 / 2.0;
-        double var23 = var3 - var6 * var7 / 2.0;
-        int var11 = Math.floorDiv(Mth.floor(var22), var21);
-        int var12 = Math.floorDiv(Mth.floor(var1 + var5 * var7 / 2.0), var21);
-        int var13 = Math.floorDiv(Mth.floor(var23), var21);
-        int var14 = Math.floorDiv(Mth.floor(var3 + var6 * var7 / 2.0), var21);
-        int var15 = Math.floorDiv(Mth.floor(var1), var21);
-        int var16 = Math.floorDiv(Mth.floor(var3), var21);
+        int var11 = cellBlocks();
+        double var12 = var1 - var5 * var7 / 2.0;
+        double var14 = var1 + var5 * var7 / 2.0;
+        double var16 = var3 - var6 * var7 / 2.0;
+        double var18 = var3 + var6 * var7 / 2.0;
+        int var20 = Math.floorDiv(Mth.floor(var12), var11);
+        int var21 = Math.floorDiv(Mth.floor(var14), var11);
+        int var22 = Math.floorDiv(Mth.floor(var16), var11);
+        int var23 = Math.floorDiv(Mth.floor(var18), var11);
 
-        // create missing cells center-out, a couple per frame
-        List<int[]> var17 = new ArrayList<>();
-        for (int var18 = var13; var18 <= var14; var18++) {
-            for (int var19 = var11; var19 <= var12; var19++) {
-                var17.add(new int[]{var19, var18});
-            }
-        }
-
-        var17.sort(Comparator.comparingInt(c -> Math.max(Math.abs(c[0] - var15), Math.abs(c[1] - var16))));
-        int var24 = 0;
-        for (int[] var25 : var17) {
-            WorldMapCells.CellKey var26 = new WorldMapCells.CellKey(var25[0], var25[1], var9, var10, var20);
-            if (!CELLS.containsKey(var26)) {
-                if (var24 >= MAX_NEW_CELLS_PER_FRAME) {
-                    continue;
+        for (int var24 = var22; var24 <= var23; var24++) {
+            for (int var25 = var20; var25 <= var21; var25++) {
+                WorldMapCells.CellKey var26 = new WorldMapCells.CellKey(var25, var24, var9, var10, currentLod);
+                if (!CELLS.containsKey(var26)) {
+                    WorldMapCells.Cell var27 = createCell(var0, var25, var24, var9, var10, currentLod);
+                    CELLS.put(var26, var27);
+                    PENDING.addLast(var27);
                 }
-                CELLS.put(var26, createCell(var0, var25[0], var25[1], var9, var10, var20));
-                evictOld();
-                var24++;
             }
         }
 
-        // bake queued/dirty chunks within the per-frame budget, nearest cells first
-        int var27 = MAX_CHUNK_FILLS_PER_FRAME;
-        List<WorldMapCells.Cell> var28 = new ArrayList<>(CELLS.values());
-        var28.sort(Comparator.comparingInt(c -> Math.max(Math.abs(c.cellX - var15), Math.abs(c.cellZ - var16))));
-        for (WorldMapCells.Cell var29 : var28) {
-            if (var27 <= 0) {
-                break;
-            }
-            var27 -= var29.work(var0, var27, var9, var10, var20);
+        processBudget(var0);
+
+        for (WorldMapCells.Cell var28 : CELLS.values()) {
+            redrawDirty(var0, var28);
         }
+
+        evictOld();
     }
 
     private static WorldMapCells.Cell createCell(ClientLevel var0, int var1, int var2, boolean var3, int var4, int var5) {
-        NativeImage var6 = new NativeImage(Format.RGBA, 512, 512, true);
+        NativeImage var6 = new NativeImage(Format.RGBA, CELL, CELL, true);
 
-        for (int var7 = 0; var7 < 512; var7++) {
-            for (int var8 = 0; var8 < 512; var8++) {
+        for (int var7 = 0; var7 < CELL; var7++) {
+            for (int var8 = 0; var8 < CELL; var8++) {
                 var6.setPixelRGBA(var8, var7, -15723752);
             }
         }
 
-        DynamicTexture var9 = new DynamicTexture(var6);
-        String var10 = var3 ? "cave" + var4 + "_" : "";
-        ResourceLocation var11 = UnboundMapsMod.id("dynmap_cell_" + var10 + var1 + "_" + var2 + "_s" + var5);
-        Minecraft.getInstance().getTextureManager().register(var11, var9);
-        WorldMapCells.Cell var12 = new WorldMapCells.Cell(var1, var2, var5, var11, var9);
+        DynamicTexture var16 = new DynamicTexture(var6);
+        String var17 = var3 ? "cave" + var4 + "_" : "";
+        ResourceLocation var8 = UnboundMapsMod.id("dynmap_cell_" + var17 + "lod" + var5 + "_" + var1 + "_" + var2);
+        Minecraft.getInstance().getTextureManager().register(var8, var16);
+        return new WorldMapCells.Cell(var1, var2, var5, var3, var4, var8, var16);
+    }
 
-        // queue the chunks of this cell center-out so the visible middle appears first
-        int var13 = span(var5);
-        int var14 = Math.floorDiv(var1 * var13, 16);
-        int var15 = Math.floorDiv((var1 + 1) * var13 - 1, 16);
-        int var16 = Math.floorDiv(var2 * var13, 16);
-        int var17 = Math.floorDiv((var2 + 1) * var13 - 1, 16);
-        List<Long> var18 = new ArrayList<>();
-        for (int var19 = var16; var19 <= var17; var19++) {
-            for (int var20 = var14; var20 <= var15; var20++) {
-                var18.add(ChunkPos.asLong(var20, var19));
+    /** Fills pending cell strips (nearest-first is approximated by FIFO) within the per-frame pixel budget. */
+    private static void processBudget(ClientLevel var0) {
+        if (PENDING.isEmpty()) {
+            return;
+        }
+        int var1 = FRAME_PIXEL_BUDGET;
+        java.util.ArrayList<WorldMapCells.Cell> var2 = new java.util.ArrayList<>();
+
+        while (var1 > 0 && !PENDING.isEmpty()) {
+            WorldMapCells.Cell var3 = PENDING.pollFirst();
+            if (var3.dead) {
+                continue;
+            }
+            fillStrip(var0, var3, var3.nextStrip++);
+            var1 -= CELL * STRIP_ROWS;
+            var2.add(var3);
+            if (var3.nextStrip < STRIPS_PER_CELL) {
+                PENDING.addLast(var3);
             }
         }
 
-        int var21 = (var14 + var15) / 2;
-        int var22 = (var16 + var17) / 2;
-        var18.sort(Comparator.comparingLong(p ->
-            (long)Math.max(Math.abs(ChunkPos.getX(p) - var21), Math.abs(ChunkPos.getZ(p) - var22))
-        ));
-        for (long var23 : var18) {
-            var12.pending.add(var23);
+        for (WorldMapCells.Cell var4 : var2) {
+            var4.texture.upload();
         }
-
-        return var12;
     }
 
-    private static void fillChunk(ClientLevel var0, WorldMapCells.Cell var1, long var2, boolean var4, int var5, int var6) {
-        NativeImage var7 = var1.texture.getPixels();
-        if (var7 == null) {
+    private static void fillStrip(ClientLevel var0, WorldMapCells.Cell var1, int var2) {
+        NativeImage var3 = var1.texture.getPixels();
+        if (var3 == null) {
             return;
         }
-        int var8 = ChunkPos.getX(var2) << 4;
-        int var9 = ChunkPos.getZ(var2) << 4;
-        int var10 = span(var6);
-        int var11 = var8 - var1.cellX * var10;
-        int var12 = var9 - var1.cellZ * var10;
-        if (var11 >= 0 && var12 >= 0 && var11 + 16 <= var10 && var12 + 16 <= var10) {
-            int var13 = var11 / var6;
-            int var14 = var12 / var6;
+        int var4 = 1 << var1.lod;
+        int var5 = var1.cellX << (9 + var1.lod);
+        int var6 = var1.cellZ << (9 + var1.lod);
+        int var7 = var2 * STRIP_ROWS;
 
-            for (int var15 = 0; var15 < 16; var15 += var6) {
-                for (int var16 = 0; var16 < 16; var16 += var6) {
-                    int var17 = var4
-                        ? MapTileCache.getSliceColor(var0, var8 + var16, var9 + var15, var5)
-                        : MapTileCache.getColor(var0, var8 + var16, var9 + var15);
-                    var7.setPixelRGBA(var13 + var16 / var6, var14 + var15 / var6, var17);
-                }
+        for (int var8 = var7; var8 < var7 + STRIP_ROWS; var8++) {
+            int var9 = var6 + (var8 << var1.lod) + (var4 >> 1);
+
+            for (int var10 = 0; var10 < CELL; var10++) {
+                int var11 = var5 + (var10 << var1.lod) + (var4 >> 1);
+                int var12 = var1.cave
+                    ? MapTileCache.getSliceColor(var0, var11, var9, var1.bucket)
+                    : MapTileCache.getColor(var0, var11, var9);
+                var3.setPixelRGBA(var10, var8, var12);
+            }
+        }
+    }
+
+    /** Redraws dirty chunks, ALWAYS in the mode the cell itself was baked for. */
+    private static void redrawDirty(ClientLevel var0, WorldMapCells.Cell var1) {
+        if (!var1.dirty.isEmpty()) {
+            long[] var2 = var1.dirty.toLongArray();
+            var1.dirty.clear();
+
+            for (long var6 : var2) {
+                fillChunk(var0, var1, ChunkPos.getX(var6), ChunkPos.getZ(var6));
+            }
+
+            var1.texture.upload();
+        }
+    }
+
+    private static void fillChunk(ClientLevel var0, WorldMapCells.Cell var1, int var2, int var3) {
+        NativeImage var4 = var1.texture.getPixels();
+        if (var4 == null) {
+            return;
+        }
+        int var5 = 1 << var1.lod;
+        int var6 = var1.cellX << (9 + var1.lod);
+        int var7 = var1.cellZ << (9 + var1.lod);
+        int var8 = Math.floorDiv(var2 << 4, var5) - (var6 >> var1.lod);
+        int var9 = Math.floorDiv((var2 << 4) + 15, var5) - (var6 >> var1.lod);
+        int var10 = Math.floorDiv(var3 << 4, var5) - (var7 >> var1.lod);
+        int var11 = Math.floorDiv((var3 << 4) + 15, var5) - (var7 >> var1.lod);
+        int var12 = Math.max(var8, 0);
+        int var13 = Math.max(var10, 0);
+        int var14 = Math.min(var9, CELL - 1);
+        int var15 = Math.min(var11, CELL - 1);
+
+        for (int var16 = var13; var16 <= var15; var16++) {
+            for (int var17 = var12; var17 <= var14; var17++) {
+                int var18 = var6 + (var17 << var1.lod) + (var5 >> 1);
+                int var19 = var7 + (var16 << var1.lod) + (var5 >> 1);
+                int var20 = var1.cave
+                    ? MapTileCache.getSliceColor(var0, var18, var19, var1.bucket)
+                    : MapTileCache.getColor(var0, var18, var19);
+                var4.setPixelRGBA(var17, var16, var20);
             }
         }
     }
@@ -220,63 +265,12 @@ public final class WorldMapCells {
         while (CELLS.size() > MAX_CELLS) {
             Iterator var1 = CELLS.entrySet().iterator();
             Entry var2 = (Entry)var1.next();
+            ((WorldMapCells.Cell)var2.getValue()).dead = true;
             var0.getTextureManager().release(((WorldMapCells.Cell)var2.getValue()).location);
             var1.remove();
         }
     }
 
-    public static final class Cell {
-        public final int cellX;
-        public final int cellZ;
-        /** LOD stride of this cell: one texel covers this many blocks. */
-        public final int stride;
-        public final ResourceLocation location;
-        public final DynamicTexture texture;
-        private final LongOpenHashSet dirty = new LongOpenHashSet();
-        private final LongOpenHashSet pending = new LongOpenHashSet();
-
-        Cell(int var1, int var2, int var3, ResourceLocation var4, DynamicTexture var5) {
-            this.cellX = var1;
-            this.cellZ = var2;
-            this.stride = var3;
-            this.location = var4;
-            this.texture = var5;
-        }
-
-        /** Bakes up to {@code budget} queued/dirty chunks; returns how many were done. */
-        int work(ClientLevel var1, int var2, boolean var3, int var4, int var5) {
-            if (this.pending.isEmpty() && this.dirty.isEmpty()) {
-                return 0;
-            }
-            int var6 = 0;
-            boolean var7 = false;
-            for (long var9 : this.pending.toLongArray()) {
-                if (var6 >= var2) {
-                    break;
-                }
-                this.pending.remove(var9);
-                fillChunk(var1, this, var9, var3, var4, var5);
-                var6++;
-                var7 = true;
-            }
-            for (long var11 : this.dirty.toLongArray()) {
-                if (var6 >= var2) {
-                    break;
-                }
-                this.dirty.remove(var11);
-                fillChunk(var1, this, var11, var3, var4, var5);
-                var6++;
-                var7 = true;
-            }
-
-            if (var7) {
-                this.texture.upload();
-            }
-
-            return var6;
-        }
-    }
-
-    private record CellKey(int cellX, int cellZ, boolean cave, int bucket, int stride) {
+    private record CellKey(int cellX, int cellZ, boolean cave, int bucket, int lod) {
     }
 }

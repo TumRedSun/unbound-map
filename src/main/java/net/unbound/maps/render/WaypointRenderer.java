@@ -50,7 +50,7 @@ public final class WaypointRenderer {
                 float var23 = var2 + var20;
                 // slim Xaero-style marker: colored square + thin dark outline
                 var0.fill((int)var26 - 2, (int)var23 - 2, (int)var26 + 2, (int)var23 + 2, var16.colorARGB);
-                var0.renderOutline((int)var26 - 3, (int)var23 - 3, (int)var26 + 3, (int)var23 + 3, -1879048192);
+                var0.renderOutline((int)var26 - 3, (int)var23 - 3, 6, 6, -1879048192);
                 var14++;
             }
 
@@ -107,7 +107,7 @@ public final class WaypointRenderer {
                     int var19 = Mth.floor(var15);
                     int var20 = Mth.floor(var17);
                     var0.fill(var19 - 2, var20 - 2, var19 + 3, var20 + 3, var14.colorARGB);
-                    var0.renderOutline(var19 - 3, var20 - 3, var19 + 4, var20 + 4, -1879048192);
+                    var0.renderOutline(var19 - 3, var20 - 3, 7, 7, -1879048192);
                     String var21 = var14.name + " (" + (int)Math.sqrt(dist2(var14, var1, var3)) + " m)";
                     float var22 = (float)var12.width(var21);
                     if (LabelPlacer.tryPlaceCentered(var19 + 0.5F, var20 - 13.0F, var22, 10.0F)) {

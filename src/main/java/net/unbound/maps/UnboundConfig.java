@@ -24,7 +24,7 @@ public final class UnboundConfig {
     public static final BooleanValue TERRAIN_SHADING;
     public static final BooleanValue BIOME_SHADING;
     public static final BooleanValue LIGHT_SHADING;
-    public static final BooleanValue NIGHT_DIM;
+    public static final IntValue NIGHT_DIM_STRENGTH;
     public static final BooleanValue ENTITY_RADAR;
     public static final IntValue RADAR_RANGE;
     public static final BooleanValue RADAR_PLAYERS;
@@ -105,7 +105,12 @@ public final class UnboundConfig {
                 " cave mode tiles are lit by block light (torches glow)."
             )
             .define("lightShading", true);
-        NIGHT_DIM = var0.comment("Dim the map at night, like Xaero does").define("nightDim", true);
+        NIGHT_DIM_STRENGTH = var0.comment(
+                "Night dimming strength: 0 = the map keeps its full daytime",
+                " colors around the clock (Xaero-style, always readable),",
+                " 1..3 = a subtle dusk/night tint on top (max 36% darker)."
+            )
+            .defineInRange("nightDimStrength", 0, 0, 3);
         var0.pop();
         var0.push("radar");
         ENTITY_RADAR = var0.comment(
