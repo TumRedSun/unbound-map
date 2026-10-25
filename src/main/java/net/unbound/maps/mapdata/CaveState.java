@@ -166,12 +166,14 @@ public final class CaveState {
             lastUndergroundPos = pos;
             pendingTicks = 0;
             int floor = level.getHeight(Types.OCEAN_FLOOR, player.getBlockX(), player.getBlockZ());
-            underground = eye < floor;
+            // getHeight returns the Y of the top motion-blocking block itself, so the
+            // old "eye < floor" boundary shifted one block up; eye <= floor keeps it
+            underground = eye <= floor;
             applyUnderground();
             return;
         }
         int floor = level.getHeight(Types.OCEAN_FLOOR, player.getBlockX(), player.getBlockZ());
-        boolean now = eye < floor;
+        boolean now = eye <= floor;
         if (now == underground) {
             pendingTicks = 0;
         } else if (++pendingTicks >= HYSTERESIS_TICKS) {

@@ -55,6 +55,8 @@ public final class EntityRadar {
     private static final int EDGE_MARGIN = 4;
     /** face pixel rect (u, v, w, h) inside the entity texture, per entity type - FALLBACK ONLY. */
     private static final Map<EntityType<?>, int[]> FACES = buildFaces();
+    /** static per-type rects that beat the model derivation (see {@link #buildOverrides()}). */
+    private static final Map<EntityType<?>, int[]> OVERRIDES = buildOverrides();
     /** face rect derived from the live entity model, normalized 0..1 (u0, v0, u1, v1); NULL_FACE = none. */
     private static final Map<EntityType<?>, float[]> MODEL_FACES = new HashMap<>();
     private static final float[] NULL_FACE = new float[0];
@@ -65,14 +67,27 @@ public final class EntityRadar {
     // reflection handles into the baked model parts. ModelPart.cubes/children and
     // Cube.polygons are private, and Polygon/Vertex are private nested classes, so
     // everything below goes through raw reflection (names are stable at runtime:
-    // NeoForge 1.21.x runs with the official mapping names in production too)
+    // NeoForge 1.21.x runs with the official mapping names in production too).
+    // NOTE: Cube.polygons is ModelPart.Polygon[] - the Polygon/Vertex field lookups
+    // must use the ARRAY'S COMPONENT type. Resolving them on the array class itself
+    // (as 1.9.0 did) always failed, silently disabling the whole live-model path so
+    // every mob fell back to the static table (pigs got "re-corrected" to a wrong
+    // rect in 1.9.0, horses had no entry at all).
     private static final Field CUBES_FIELD = field(ModelPart.class, "cubes");
     private static final Field CHILDREN_FIELD = field(ModelPart.class, "children");
     private static final Field POLYGONS_FIELD = field(ModelPart.Cube.class, "polygons");
-    private static final Field NORMAL_FIELD = declaredField(POLYGONS_FIELD == null ? null : POLYGONS_FIELD.getType(), "normal");
-    private static final Field VERTICES_FIELD = declaredField(POLYGONS_FIELD == null ? null : POLYGONS_FIELD.getType(), "vertices");
-    private static final Field U_FIELD = declaredField(VERTICES_FIELD == null ? null : VERTICES_FIELD.getType().componentType(), "u");
-    private static final Field V_FIELD = declaredField(VERTICES_FIELD == null ? null : VERTICES_FIELD.getType().componentType(), "v");
+    private static final Field NORMAL_FIELD = declaredField(polyClass(), "normal");
+    private static final Field VERTICES_FIELD = declaredField(polyClass(), "vertices");
+    private static final Field U_FIELD = declaredField(vertexClass(), "u");
+    private static final Field V_FIELD = declaredField(vertexClass(), "v");
+
+    private static Class<?> polyClass() {
+        return POLYGONS_FIELD == null ? null : POLYGONS_FIELD.getType().getComponentType();
+    }
+
+    private static Class<?> vertexClass() {
+        return VERTICES_FIELD == null ? null : VERTICES_FIELD.getType().getComponentType();
+    }
     private static int iconSeq;
     private static final int DOT_HOSTILE = 0xFFE05050;
     private static final int DOT_PASSIVE = 0xFF6FE06F;
@@ -84,8 +99,8 @@ public final class EntityRadar {
     /**
      * Head face rects from the vanilla model boxes - only used as a fallback when
      * the live model could not be inspected. A box at texture (u,v) with depth d has
-     * its front face at (u+d, v+d), e.g. humanoid 8x8x8 heads at (8,8), pig 8x8x6
-     * at (6,6) sized 8x8, wolf 6x6x4 at (4,4).
+     * its front face at (u+d, v+d): humanoid 8x8x8 heads at (8,8), pig 8x8x8 at
+     * (8,8), cow 8x8x6 at (6,6), sheep 6x6x8 at (8,8), wolf 6x6x4 at (4,4).
      */
     private static Map<EntityType<?>, int[]> buildFaces() {
         Map<EntityType<?>, int[]> var0 = new HashMap<>();
@@ -98,10 +113,13 @@ public final class EntityRadar {
         square8(var0, EntityType.GLOW_SQUID, EntityType.GUARDIAN, EntityType.ELDER_GUARDIAN, EntityType.HOGLIN);
         square8(var0, EntityType.ZOGLIN, EntityType.RAVAGER, EntityType.WARDEN, EntityType.BLAZE);
         square8(var0, EntityType.PHANTOM, EntityType.PANDA);
-        var0.put(EntityType.PIG, new int[]{6, 6, 8, 8});
+        // quadruped head rects verified against the real 1.21.1 models/textures:
+        // pig head is an 8x8x8 box at texOffs(0,0) -> face at (8,8); cow 8x8x6 -> (6,6);
+        // sheep 6x6x8 -> (8,8). The old (6,6,8,8) pig rect painted a broken face.
+        var0.put(EntityType.PIG, new int[]{8, 8, 8, 8});
         var0.put(EntityType.COW, new int[]{6, 6, 8, 8});
         var0.put(EntityType.MOOSHROOM, new int[]{6, 6, 8, 8});
-        var0.put(EntityType.SHEEP, new int[]{6, 6, 6, 6});
+        var0.put(EntityType.SHEEP, new int[]{8, 8, 6, 6});
         var0.put(EntityType.WOLF, new int[]{4, 4, 6, 6});
         var0.put(EntityType.CAT, new int[]{5, 5, 5, 4});
         var0.put(EntityType.OCELOT, new int[]{5, 5, 5, 4});
@@ -115,6 +133,23 @@ public final class EntityRadar {
         var0.put(EntityType.SLIME, new int[]{8, 24, 8, 8});
         var0.put(EntityType.MAGMA_CUBE, new int[]{8, 24, 8, 8});
         var0.put(EntityType.RABBIT, new int[]{3, 3, 4, 4});
+        return var0;
+    }
+
+    /**
+     * Static rects that BEAT the live model derivation: the horse family's head
+     * part front face is only the featureless 6x5 muzzle bridge, while the real
+     * face with both eyes spans the whole head band at (0,20)-(20,25) of the
+     * 64x64 horse/donkey/mule textures (same layout for every variant).
+     */
+    private static Map<EntityType<?>, int[]> buildOverrides() {
+        Map<EntityType<?>, int[]> var0 = new HashMap<>();
+        int[] horse = new int[]{0, 20, 20, 5};
+        var0.put(EntityType.HORSE, horse);
+        var0.put(EntityType.DONKEY, horse);
+        var0.put(EntityType.MULE, horse);
+        var0.put(EntityType.SKELETON_HORSE, horse);
+        var0.put(EntityType.ZOMBIE_HORSE, horse);
         return var0;
     }
 
@@ -310,6 +345,15 @@ public final class EntityRadar {
      * per-type table for exotic layouts.
      */
     private static int[] faceRect(Minecraft var0, Entity var1) {
+        // 1) static override (horse family head band with both eyes)
+        int[] var11 = OVERRIDES.get(var1.getType());
+        if (var11 != null) {
+            int[] var12 = resolveRect(var0, var1, var11);
+            if (var12 != null) {
+                return var12;
+            }
+        }
+
         float[] var2 = MODEL_FACES.get(var1.getType());
         if (var2 == null) {
             var2 = deriveFace(var0, var1);
@@ -339,6 +383,12 @@ public final class EntityRadar {
         if (var10 == null) {
             return null;
         }
+
+        return resolveRect(var0, var1, var10);
+    }
+
+    /** Clamps a static pixel rect against the entity's texture size. */
+    private static int[] resolveRect(Minecraft var0, Entity var1, int[] var10) {
         try {
             ResourceLocation var11 = ((EntityRenderer)var0.getEntityRenderDispatcher().getRenderer(var1)).getTextureLocation(var1);
             int[] var12 = textureSize(var0, var11);

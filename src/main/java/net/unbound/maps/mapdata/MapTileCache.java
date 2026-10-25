@@ -267,12 +267,13 @@ public final class MapTileCache {
             if (var6 != null) {
                 int var7 = var6.heights[(var2 & 15) << 4 | var1 & 15];
                 if (var7 != Integer.MIN_VALUE) {
-                    return var7 - 1;
+                    // heights hold the Y of the TOP surface block itself
+                    return var7;
                 }
             }
 
             int var8 = surfaceHeight(var0, var1, var2);
-            return var8 != Integer.MIN_VALUE ? var8 - 1 : var3;
+            return var8 != Integer.MIN_VALUE ? var8 : var3;
         }
     }
 
@@ -388,10 +389,36 @@ public final class MapTileCache {
             if (MapStore.isEnabled()) {
                 MapStore.StoredChunk var7 = MapStore.storedChunk(var0.dimension(), var4);
                 if (var7 != null) {
+                    int[] var8 = var7.colors();
+                    // Legacy repair: chunks explored before 1.10.0 painted the block
+                    // UNDER the surface, so every tree canopy (air under the top leaf)
+                    // was stored as UNKNOWN and showed as black blobs on the map.
+                    // Those columns are certainly tree tops - render the default
+                    // foliage green instead of the "unknown" hole. The stored array
+                    // is shared with the region cache, so repair on a CLONE only.
+                    if (var8 != null) {
+                        int[] var9 = var8;
+                        boolean var10 = false;
+                        for (int var11 = 0; var11 < 256; var11++) {
+                            if (var9[var11] == -15723752
+                                && var7.heights() != null
+                                && var7.heights()[var11] != Integer.MIN_VALUE) {
+                                if (!var10) {
+                                    var9 = var8.clone();
+                                    var10 = true;
+                                }
+
+                                var9[var11] = tintAbgr(mapColorAbgr(MapColor.PLANT), 0x48B518);
+                            }
+                        }
+
+                        var8 = var9;
+                    }
+
                     // stored light nibbles (v2 format) were captured with the old buggy
                     // sampling and are intentionally ignored: surface tiles are full-bright
                     return new MapTileCache.Entry(
-                        var7.colors(), var7.heights() == null ? defaultHeights() : var7.heights(), true, true
+                        var8, var7.heights() == null ? defaultHeights() : var7.heights(), true, true
                     );
                 }
             }
@@ -411,12 +438,16 @@ public final class MapTileCache {
             for (int var13 = 0; var13 < 16; var13++) {
                 for (int var14 = 0; var14 < 16; var14++) {
                     int var15 = var13 << 4 | var14;
+                    // ChunkAccess.getHeight already returns the Y of the TOP non-air
+                    // block (getFirstAvailable - 1) - the old code read h-1 and painted
+                    // the block UNDER the surface (dirt where grass should be, air
+                    // under tree canopies -> black "unknown" forest, "chunk noise").
                     int var16 = var6.getHeight(Types.WORLD_SURFACE, var14, var13);
                     var33[var15] = var16;
                     if (var16 <= var11) {
                         var32[var15] = -15723752;
                     } else {
-                        var12.set(var9 + var14, var16 - 1, var10 + var13);
+                        var12.set(var9 + var14, var16, var10 + var13);
                         BlockState var17 = var6.getBlockState(var12);
                         if (var17.isAir()) {
                             var32[var15] = -15723752;
@@ -431,7 +462,14 @@ public final class MapTileCache {
                                 } else if (var17.is(BlockTags.LEAVES)) {
                                     var19 = tintAbgr(var19, var21.getFoliageColor());
                                 } else if (var18 == MapColor.GRASS || var18 == MapColor.PLANT) {
-                                    var19 = tintAbgr(var19, var21.getGrassColor((double)var12.getX(), (double)var12.getZ()));
+                                    // Xaero-like uniform grass: plant blocks (short/tall
+                                    // grass, ferns, crops...) keep the PLANT map color whose
+                                    // zero R/B channels made tinted pixels a darker, different
+                                    // green than the grass_block next to them (salt-and-pepper
+                                    // noise). Rendering them on the GRASS base color makes
+                                    // plains one smooth, monolithic color.
+                                    int var22 = var18 == MapColor.PLANT ? mapColorAbgr(MapColor.GRASS) : var19;
+                                    var19 = tintAbgr(var22, var21.getGrassColor((double)var12.getX(), (double)var12.getZ()));
                                 }
                             }
 
@@ -485,7 +523,8 @@ public final class MapTileCache {
         try {
             for (int var13 = 0; var13 < 256; var13++) {
                 if (var5.colors[var13] != -15723752) {
-                    var9.set((var1 << 4) + (var13 & 15), Math.max(var5.heights[var13] - 1, var0.getMinBuildHeight()), (var2 << 4) + (var13 >> 4));
+                    // the top surface block itself (heights hold its Y)
+                    var9.set((var1 << 4) + (var13 & 15), Math.max(var5.heights[var13], var0.getMinBuildHeight()), (var2 << 4) + (var13 >> 4));
                     BlockState var14 = var0.getBlockState(var9);
                     var8.add(BuiltInRegistries.BLOCK.getKey(var14.getBlock()).toString());
                     String var15 = var0.getBiome(var9)
@@ -529,27 +568,29 @@ public final class MapTileCache {
         return var0;
     }
 
-    /** Cross-chunk hillshade: darkens slopes facing away, brightens slopes facing the light. */
+    /**
+     * Hillshade: darkens slopes facing away, brightens slopes facing the light.
+     * Deterministic per chunk: samples NEVER cross the chunk border, so a chunk
+     * shades identically no matter which neighbor was scanned first. The old
+     * cross-chunk reads depended on scan order (border columns shaded before the
+     * neighbor existed used a different fallback) and burned permanent "chunk
+     * lines" into both maps.
+     */
     private static void shadeEntry(ClientLevel var0, int var1, int var2, MapTileCache.Entry var3) {
         if (var3.shaded) {
             return;
         }
         boolean var4 = flag(UnboundConfig.TERRAIN_SHADING, true);
         if (var4) {
-            MapTileCache.Entry var5 = neighborEntry(var0, var1 - 1, var2);
-            MapTileCache.Entry var6 = neighborEntry(var0, var1 + 1, var2);
-            MapTileCache.Entry var7 = neighborEntry(var0, var1, var2 - 1);
-            MapTileCache.Entry var8 = neighborEntry(var0, var1, var2 + 1);
-
             for (int var9 = 0; var9 < 16; var9++) {
                 for (int var10 = 0; var10 < 16; var10++) {
                     int var11 = var9 << 4 | var10;
                     if (var3.colors[var11] != -15723752) {
                         int var12 = var3.heights[var11];
-                        int var13 = heightAt(var3, var5, var7, var10 - 1, var9 - 1, var12);
+                        int var13 = heightAt(var3, var10 - 1, var9 - 1, var12);
                         float var14 = Mth.clamp(1.0F + (float)(var12 - var13) * 0.06F, 0.82F, 1.18F);
-                        int var15 = heightAt(var3, var6, null, var10 + 1, var9, var12);
-                        int var16 = heightAt(var3, var8, null, var10, var9 + 1, var12);
+                        int var15 = heightAt(var3, var10 + 1, var9, var12);
+                        int var16 = heightAt(var3, var10, var9 + 1, var12);
                         if (Math.abs(var12 - var15) >= 4 || Math.abs(var12 - var16) >= 4) {
                             var14 *= 0.94F;
                         }
@@ -565,32 +606,12 @@ public final class MapTileCache {
         var3.shaded = true;
     }
 
-    /** Height of a local column (lx, lz may leave 0..15 by one block into the given neighbor). */
-    private static int heightAt(MapTileCache.Entry var0, MapTileCache.Entry var1, MapTileCache.Entry var2, int var3, int var4, int var5) {
-        if (var3 >= 0 && var3 < 16 && var4 >= 0 && var4 < 16) {
-            int var8 = var0.heights[var4 << 4 | var3];
-            return var8 != Integer.MIN_VALUE ? var8 : var5;
-        } else if (var1 != null) {
-            int var6 = ((var3 % 16) + 16) % 16;
-            int var7 = ((var4 % 16) + 16) % 16;
-            int var9 = var1.heights[var7 << 4 | var6];
-            return var9 != Integer.MIN_VALUE ? var9 : var5;
-        } else {
-            return var5;
-        }
-    }
-
-    private static MapTileCache.Entry neighborEntry(ClientLevel var0, int var1, int var2) {
-        long var3 = ChunkPos.asLong(var1, var2);
-        MapTileCache.Entry var5 = (MapTileCache.Entry)CHUNKS.get(var3);
-        if (var5 == null) {
-            var5 = computeEntry(var0, var1, var2, false);
-            if (var5 != null) {
-                storeWithLimit(CHUNKS, var3, var5, 40000);
-            }
-        }
-
-        return var5;
+    /** Height of a local column (lx, lz clamped to 0..15 - never crosses the chunk). */
+    private static int heightAt(MapTileCache.Entry var0, int var3, int var4, int var5) {
+        int var6 = Mth.clamp(var3, 0, 15);
+        int var7 = Mth.clamp(var4, 0, 15);
+        int var8 = var0.heights[var7 << 4 | var6];
+        return var8 != Integer.MIN_VALUE ? var8 : var5;
     }
 
     public static int getSliceColor(ClientLevel var0, int var1, int var2, int var3) {
@@ -634,6 +655,7 @@ public final class MapTileCache {
             int var6 = sliceRange() * 2;
             int var7 = var0.getMinBuildHeight();
             int var8 = var0.getMaxBuildHeight();
+            int var30 = Mth.clamp(var5, var7, var8 - 1);
             int[] var9 = new int[256];
             int[] var10 = new int[256];
             int var11 = var1 << 4;
@@ -643,38 +665,66 @@ public final class MapTileCache {
             for (int var14 = 0; var14 < 16; var14++) {
                 for (int var15 = 0; var15 < 16; var15++) {
                     int var16 = var15 << 4 | var14;
-                    int var17 = sliceTop(var4, var14, var15, var5, var7, var8);
-                    var9[var16] = var17;
-                    if (var17 == Integer.MIN_VALUE) {
-                        var10[var16] = -15723752;
-                    } else {
-                        var13.set(var11 + var14, var17, var12 + var15);
-                        BlockState var18 = var4.getBlockState(var13);
-                        int var19 = mapColorAbgr(var18.getMapColor(var4, var13));
-                        if (!var18.getFluidState().isEmpty()) {
-                            if (var18.getFluidState().is(net.minecraft.tags.FluidTags.LAVA)) {
-                                var19 = lavaColor(var19);
+                    // Xaero-readable cut-lid: what matters is whether the column is
+                    // SOLID at the view height or has a CAVITY there. The old code
+                    // always rendered the first block below the cut, so solid rock
+                    // and tunnel floors were the same stone grey and caves were an
+                    // unreadable mush - now rock is bright and cavities are dark
+                    // shapes (with torch-lit floors glowing), like Xaero's caves.
+                    var13.set(var11 + var14, var30, var12 + var15);
+                    BlockState var31 = var4.getBlockState(var13);
+                    if (!var31.isAir()) {
+                        // solid at the cut level: render the block itself, full-bright
+                        var9[var16] = var30;
+                        int var32 = mapColorAbgr(var31.getMapColor(var4, var13));
+                        if (!var31.getFluidState().isEmpty()) {
+                            if (var31.getFluidState().is(net.minecraft.tags.FluidTags.LAVA)) {
+                                var32 = lavaColor(var32);
                             } else {
-                                int var20 = 0;
-
-                                for (BlockPos var21 = var13.immutable(); var20 < 12 && !var4.getFluidState(var21).isEmpty(); var20++) {
-                                    var21 = var21.below();
-                                }
-
-                                var19 = shadeAbgr(var19, Math.max(0.4F, 1.0F - var20 * 0.08F));
+                                var32 = shadeAbgr(var32, 0.85F);
                             }
                         }
 
-                        if (var29) {
-                            // light inside the cavity itself: torches light the
-                            // cave floor, lava pools glow, dark rooms stay dark
-                            var13.set(var11 + var14, Math.min(var17 + 1, var8 - 1), var12 + var15);
-                            int var22 = var0.getBrightness(LightLayer.SKY, var13);
-                            int var23 = var0.getBrightness(LightLayer.BLOCK, var13);
-                            var19 = shadeAbgr(var19, lightShade(var0, var22, var23));
-                        }
+                        var10[var16] = var32;
+                    } else {
+                        // cavity at the cut level: find the floor below
+                        int var33 = sliceTop(var4, var14, var15, var5, var7, var8);
+                        var9[var16] = var33;
+                        if (var33 == Integer.MIN_VALUE) {
+                            var10[var16] = -15723752;
+                        } else {
+                            var13.set(var11 + var14, var33, var12 + var15);
+                            BlockState var34 = var4.getBlockState(var13);
+                            int var35 = mapColorAbgr(var34.getMapColor(var4, var13));
+                            if (!var34.getFluidState().isEmpty()) {
+                                if (var34.getFluidState().is(net.minecraft.tags.FluidTags.LAVA)) {
+                                    var35 = lavaColor(var35);
+                                } else {
+                                    int var36 = 0;
 
-                        var10[var16] = shadeAbgr(var19, sliceDepthDim(var17, var5, var6));
+                                    for (BlockPos var37 = var13.immutable(); var36 < 12 && !var4.getFluidState(var37).isEmpty(); var36++) {
+                                        var37 = var37.below();
+                                    }
+
+                                    var35 = shadeAbgr(var35, Math.max(0.4F, 1.0F - var36 * 0.08F));
+                                }
+
+                                // water/lava floors read like the surface map
+                                var10[var16] = shadeAbgr(var35, sliceDepthDim(var33, var5, var6));
+                            } else {
+                                // cave floor: dark by default (the tunnel shape reads
+                                // against bright rock), torch/sky light brightens it
+                                float var38 = 0.35F;
+                                if (var29) {
+                                    var13.set(var11 + var14, Math.min(var33 + 1, var8 - 1), var12 + var15);
+                                    int var39 = var0.getBrightness(LightLayer.SKY, var13);
+                                    int var40 = var0.getBrightness(LightLayer.BLOCK, var13);
+                                    var38 = Math.max(var38, lightShade(var0, var39, var40));
+                                }
+
+                                var10[var16] = shadeAbgr(var35, var38 * sliceDepthDim(var33, var5, var6));
+                            }
+                        }
                     }
                 }
             }
@@ -690,12 +740,12 @@ public final class MapTileCache {
 
     /**
      * Approximate cut-lid for an explored-but-unloaded chunk, rebuilt from the
-     * persistent store (colors + surface heights, no per-block data):
-     * - columns whose real surface lies at/below the view height render exactly
-     *   like the surface map with the usual depth fade (plains, ocean floors,
-     *   valley bottoms);
-     * - columns whose terrain rises above the view height are "underground":
-     *   they show a dark silhouette of the terrain, like Xaero's unlit cave view.
+     * persistent store (colors + surface heights, no per-block data), aligned
+     * with the live slice look:
+     * - columns whose real surface lies BELOW the view height are open cavities
+     *   (valleys, ocean floors) - the sky-lit floor shows the surface color;
+     * - columns whose terrain rises above the view height are solid at the cut:
+     *   neutral stone/deepslate grey, matching the full-bright rock of live chunks.
      */
     private static MapTileCache.Entry storedSliceChunk(ClientLevel var0, int var1, int var2, int var3) {
         if (!MapStore.isEnabled()) {
@@ -709,23 +759,26 @@ public final class MapTileCache {
 
         int var5 = bucketCenterY(var3);
         int var6 = sliceRange() * 2;
+        int var11 = mapColorAbgr(var5 < 0 ? MapColor.DEEPSLATE : MapColor.STONE);
         int[] var7 = var4.colors();
         int[] var8 = var4.heights() == null ? defaultHeights() : var4.heights();
         int[] var9 = new int[256];
         int[] var10 = new int[256];
 
-        for (int var11 = 0; var11 < 256; var11++) {
-            if (var7[var11] != UNKNOWN && var8[var11] != Integer.MIN_VALUE) {
-                int var12 = var8[var11] - 1;
-                var10[var11] = var12;
-                if (var12 <= var5) {
-                    var9[var11] = shadeAbgr(var7[var11], sliceDepthDim(var12, var5, var6));
+        for (int var12 = 0; var12 < 256; var12++) {
+            if (var7[var12] != UNKNOWN && var8[var12] != Integer.MIN_VALUE) {
+                int var13 = var8[var12];
+                var10[var12] = var13;
+                if (var13 >= var5) {
+                    // solid at the cut level: unknown rock, same grey as live rock
+                    var9[var12] = shadeAbgr(var11, 0.9F);
                 } else {
-                    var9[var11] = shadeAbgr(var7[var11], 0.10F);
+                    // open cavity down to the stored surface: sky-lit floor
+                    var9[var12] = shadeAbgr(var7[var12], Math.max(0.45F, sliceDepthDim(var13, var5, var6)));
                 }
             } else {
-                var9[var11] = UNKNOWN;
-                var10[var11] = Integer.MIN_VALUE;
+                var9[var12] = UNKNOWN;
+                var10[var12] = Integer.MIN_VALUE;
             }
         }
 

@@ -18,9 +18,12 @@ and it does not pretend to be them. Addons should integrate through the stable p
 - Square or round HUD minimap with zoom keys, coordinates and biome line
 - **Entity radar** with Xaero-style icons: player heads from skins, mob heads cropped
   from entity textures where the face layout is known, category-colored dots otherwise;
+  the face rect is read from the live entity model (vanilla and modded mobs alike)
+  with verified static rects for exotic layouts (pig, sheep, the horse family);
   range and categories are configurable
 - **Map shading** (all toggleable in the client config):
-  - terrain depth (cross-chunk hillshade, slopes facing the light are brightened)
+  - terrain depth (per-chunk deterministic hillshade — no seams or "chunk lines",
+    slopes facing the light are brightened)
   - biome colors (grass/foliage/water per biome — swamp, jungle, badlands, ...)
   - light shading (cave mode tiles are lit by block light, torches glow)
   - a gentle Xaero-like night dim applied as a draw-time tint: the surface map

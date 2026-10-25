@@ -1049,7 +1049,7 @@ public class WorldMapScreen extends Screen {
                             continue;
                         }
                         if (this.biomeIdMatches(palette[idx], norm, tagQuery, tagRl)) {
-                            int y = heights != null && heights[i] != Integer.MIN_VALUE ? heights[i] - 1 : 64;
+                            int y = heights != null && heights[i] != Integer.MIN_VALUE ? heights[i] : 64;
                             String label = this.biomeIdLabel(palette[idx]);
                             var5.add(new WorldMapScreen.SearchHit(cx * 16 + (i & 15), y, cz * 16 + (i >> 4), label, -13996851));
                             break;
@@ -1068,7 +1068,7 @@ public class WorldMapScreen extends Screen {
                         }
                         for (WorldMapScreen.BiomeSig sig : matchingSigs) {
                             if (sig.matches(color)) {
-                                int y = heights != null && heights[i] != Integer.MIN_VALUE ? heights[i] - 1 : 64;
+                                int y = heights != null && heights[i] != Integer.MIN_VALUE ? heights[i] : 64;
                                 var5.add(new WorldMapScreen.SearchHit(
                                     cx * 16 + (i & 15), y, cz * 16 + (i >> 4), this.biomeIdLabel(sig.id), -13996851
                                 ));
