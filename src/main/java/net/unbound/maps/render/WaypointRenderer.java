@@ -69,6 +69,9 @@ public final class WaypointRenderer {
             for (Waypoint var14 : var11) {
                 double var15 = var5 + (var14.x + 0.5 - var1) / var9;
                 double var17 = var7 + (var14.z + 0.5 - var3) / var9;
+                if (!Double.isFinite(var15) || !Double.isFinite(var17)) {
+                    continue;
+                }
                 if (!(var15 < -24.0) && !(var17 < -24.0) && !(var15 > var5 * 2.0 + 24.0) && !(var17 > var7 * 2.0 + 24.0)) {
                     int var19 = (int)var15;
                     int var20 = (int)var17;

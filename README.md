@@ -16,11 +16,28 @@ and it does not pretend to be them. Addons should integrate through the stable p
 ## Features
 
 - Square or round HUD minimap with zoom keys, coordinates and biome line
+- **Entity radar** with Xaero-style icons: player heads from skins, mob heads cropped
+  from entity textures where the face layout is known, category-colored dots otherwise;
+  range and categories are configurable
+- **Map shading** (all toggleable in the client config):
+  - terrain depth (cross-chunk hillshade, slopes facing the light are brightened)
+  - biome colors (grass/foliage/water per biome — swamp, jungle, badlands, ...)
+  - light shading (roofs and caves darken, torches glow in cave mode)
+  - night dimming of the whole map
 - Full-screen world map with drag panning, scroll zoom and a right-click context menu
   (edit/delete waypoint, create waypoint, "Teleport here" — the command template is
   configurable in the client config, e.g. `/tp @s {x} {y} {z}` or an `/execute in` variant)
-- Cave mode (Xaero-style slice around the player's altitude, works at any depth and in
-  every dimension, toggle with `C`)
+- World map info bar: coordinates, chunk, **the block/fluid under the cursor and the
+  biome of that chunk**
+- **Automatic cave mode** (Xaero-style): switches to the slice view when your eyes go
+  below the solid terrain surface — swimming *on* water keeps the top view, diving or
+  mining switches to the slice. Manual `C` toggle overrides the automation for a few
+  seconds; the slice range is configurable
+- **Persistent explored map** per server/world and per dimension: chunk colors and
+  heights are saved to region files (gzip), the list of seen biomes and blocks goes to
+  a readable `discovery.json`; unexplored-but-unloaded chunks keep rendering from the
+  cache. Paths: `<world>/unboundmaps/map/<dimension>` in singleplayer,
+  `unboundmaps/servers/<ip>/map/<dimension>` for servers
 - Waypoints saved per world / per server and per dimension as JSON, with optional
   death points, in-world beacon beams and on-screen floating labels
 - A small API (`net.unbound.maps.api.UnboundMapsApi`) for other mods to add / remove /

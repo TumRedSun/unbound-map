@@ -8,12 +8,14 @@ license="GPL-3.0-or-later"
 
 [[mods]]
 modId="unboundmaps"
-version="1.2.0"
+version="1.3.0"
 displayName="Unbound Maps"
 authors="Unbound"
-description='''Original open-source minimap and world map for NeoForge: a square HUD minimap,
-a full-screen world map with a right-click menu (waypoints and teleport),
-unrestricted cave mode and a waypoint system with in-world beacon beams.
+description='''Original open-source minimap and world map for NeoForge: a square HUD minimap
+with an entity radar, a full-screen world map with terrain depth, biome and light
+shading, an info bar (block and biome under the cursor), automatic cave mode,
+persistent explored-map storage per server/world and a waypoint system with
+in-world beacon beams.
 An independent project: it contains no code, assets or identifiers from other map mods,
 and it does not pretend to be them. Addons should integrate through the stable
 package net.unbound.maps.api.'''

@@ -20,6 +20,17 @@ public final class UnboundConfig {
     public static final BooleanValue BEAM_SEE_THROUGH;
     public static final BooleanValue SHOW_MARKERS_ON_SCREEN;
     public static final IntValue CAVE_RANGE;
+    public static final BooleanValue AUTO_CAVE_MODE;
+    public static final BooleanValue TERRAIN_SHADING;
+    public static final BooleanValue BIOME_SHADING;
+    public static final BooleanValue LIGHT_SHADING;
+    public static final BooleanValue NIGHT_DIM;
+    public static final BooleanValue ENTITY_RADAR;
+    public static final IntValue RADAR_RANGE;
+    public static final BooleanValue RADAR_PLAYERS;
+    public static final BooleanValue RADAR_HOSTILES;
+    public static final BooleanValue RADAR_PASSIVES;
+    public static final BooleanValue PERSIST_MAP;
     public static final ConfigValue<String> TELEPORT_COMMAND;
 
     private UnboundConfig() {
@@ -62,6 +73,58 @@ public final class UnboundConfig {
                 " works at any depth, in every dimension."
             )
             .defineInRange("sliceRange", 10, 2, 64);
+        AUTO_CAVE_MODE = var0.comment(
+                "Automatically switch between surface and cave mode",
+                " like Xaero does: cave mode engages when the player's",
+                " eyes drop below the solid terrain surface (OCEAN_FLOOR",
+                " heightmap), so swimming ON water still shows the top view,",
+                " while diving or mining switches to the slice view.",
+                " Pressing C toggles the mode manually and overrides",
+                " the automation until the underground state changes again."
+            )
+            .define("autoCaveMode", true);
+        var0.pop();
+        var0.push("shading");
+        TERRAIN_SHADING = var0.comment(
+                "Terrain depth shading: slopes facing away are darkened,",
+                " slopes facing the light are brightened (hillshade,",
+                " computed across chunk borders)."
+            )
+            .define("terrainDepth", true);
+        BIOME_SHADING = var0.comment(
+                "Biome shading: grass and foliage get their biome color,",
+                " water gets the biome water color (swamp, jungle, badlands...)."
+            )
+            .define("biomeColors", true);
+        LIGHT_SHADING = var0.comment(
+                "Light shading: surface tiles under roofs/leaves darken,",
+                " cave mode tiles are lit by block light (torches glow)."
+            )
+            .define("lightShading", true);
+        NIGHT_DIM = var0.comment("Dim the map at night, like Xaero does").define("nightDim", true);
+        var0.pop();
+        var0.push("radar");
+        ENTITY_RADAR = var0.comment(
+                "Show live entities on the minimap: player heads from skins,",
+                " mob heads from their textures where the face layout is known,",
+                " colored dots for everything else."
+            )
+            .define("enabled", true);
+        RADAR_RANGE = var0.comment("Radar radius in blocks (16 - 512)").defineInRange("range", 64, 16, 512);
+        RADAR_PLAYERS = var0.comment("Show other players on the radar").define("showPlayers", true);
+        RADAR_HOSTILES = var0.comment("Show hostile mobs on the radar").define("showHostiles", true);
+        RADAR_PASSIVES = var0.comment("Show passive mobs and villagers on the radar").define("showPassives", true);
+        var0.pop();
+        var0.push("persistence");
+        PERSIST_MAP = var0.comment(
+                "Save the explored map to disk per server/world/dimension:",
+                " terrain colors and heights per chunk, plus the full list of",
+                " biomes and blocks you have ever seen (discovery.json).",
+                " Files live in <world>/unboundmaps/map/<dimension> for",
+                " singleplayer and in unboundmaps/servers/<ip>/map/<dimension>",
+                " for multiplayer. Unloaded chunks keep rendering from the cache."
+            )
+            .define("enabled", true);
         var0.pop();
         var0.push("worldmap");
         TELEPORT_COMMAND = var0.comment(

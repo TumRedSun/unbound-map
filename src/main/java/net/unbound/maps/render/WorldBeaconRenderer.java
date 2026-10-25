@@ -52,11 +52,15 @@ public final class WorldBeaconRenderer {
 
                     try {
                         BufferBuilder var13 = Tesselator.getInstance().begin(Mode.QUADS, DefaultVertexFormat.POSITION_COLOR);
+                        RenderSystem.setShaderColor(1.0F, 1.0F, 1.0F, 1.0F);
                         int var14 = 0;
                         double var15 = var5 == Integer.MAX_VALUE ? Double.MAX_VALUE : (double)var5 * var5;
 
                         for (Waypoint var18 : var6) {
                             if (var18.beacon) {
+                                if (!Double.isFinite(var18.x) || !Double.isFinite(var18.y) || !Double.isFinite(var18.z)) {
+                                    continue;
+                                }
                                 double var19 = var18.x + 0.5 - var9.x;
                                 double var21 = var18.z + 0.5 - var9.z;
                                 if (!(var19 * var19 + var21 * var21 > var15)) {
@@ -93,6 +97,7 @@ public final class WorldBeaconRenderer {
                         RenderSystem.enableCull();
                         RenderSystem.depthMask(true);
                         RenderSystem.disableBlend();
+                        RenderSystem.setShaderColor(1.0F, 1.0F, 1.0F, 1.0F);
                         var10.popPose();
                     }
                 }

@@ -19,7 +19,6 @@ public final class DrawHelper {
     ) {
         RenderSystem.setShaderTexture(0, var1);
         RenderSystem.setShader(GameRenderer::getPositionTexShader);
-        RenderSystem.setShaderColor(1.0F, 1.0F, 1.0F, 1.0F);
         BufferBuilder var10 = Tesselator.getInstance().begin(Mode.QUADS, DefaultVertexFormat.POSITION_TEX);
         var10.addVertex(var0, var2, var3, 0.0F).setUv(var6, var7);
         var10.addVertex(var0, var2, var5, 0.0F).setUv(var6, var9);

@@ -29,6 +29,18 @@ public final class MinimapHud {
     private MinimapHud() {
     }
 
+    /** Xaero-style night dimming factor for map tiles (1.0 at day, ~0.55 at night). */
+    public static float mapDim(Minecraft var0) {
+        try {
+            if (var0.level != null && UnboundConfig.NIGHT_DIM.get()) {
+                return 1.0F - 0.45F * (float)var0.level.getSkyDarken() / 15.0F;
+            }
+        } catch (NullPointerException | IllegalStateException var1) {
+        }
+
+        return 1.0F;
+    }
+
     public static void zoomIn() {
         if (zoomIndex > 0) {
             zoomIndex--;
@@ -61,14 +73,18 @@ public final class MinimapHud {
                 Matrix4f var17 = var0.pose().last().pose();
                 RenderSystem.enableBlend();
                 RenderSystem.defaultBlendFunc();
+                float dimFactor = mapDim(var2);
+                RenderSystem.setShaderColor(dimFactor, dimFactor, dimFactor, 1.0F);
                 if (var9) {
                     renderSquare(var0, var17, var6, var7, var5, var8, var10, var12, var14, var15, var16);
                 } else {
                     renderRound(var17, var6, var7, var5, var8, var10, var12, var14, var15, var16);
                 }
+                RenderSystem.setShaderColor(1.0F, 1.0F, 1.0F, 1.0F);
 
                 var0.drawString(var2.font, "N", var6 - var2.font.width("N") / 2, var7 - var5 - 11, -4668212, true);
                 WaypointRenderer.drawMinimapMarkers(var0, var6, var7, var5, var8, var10, var12, var9);
+                EntityRadar.draw(var0, var6, var7, var5, var8, var10, var12, var9);
                 DrawHelper.playerArrow(var17, var6, var7, var3.getYRot());
                 boolean var18 = UnboundConfig.SHOW_COORDS.get();
                 boolean var19 = UnboundConfig.SHOW_BIOME.get();
@@ -135,7 +151,6 @@ public final class MinimapHud {
     private static void renderRound(Matrix4f var0, int var1, int var2, int var3, float var4, double var5, double var7, int var9, int var10, float var11) {
         RenderSystem.setShaderTexture(0, MinimapTexture.location());
         RenderSystem.setShader(GameRenderer::getPositionTexShader);
-        RenderSystem.setShaderColor(1.0F, 1.0F, 1.0F, 1.0F);
         BufferBuilder var12 = Tesselator.getInstance().begin(Mode.TRIANGLE_FAN, DefaultVertexFormat.POSITION_TEX);
         var12.addVertex(var0, var1, var2, 0.0F).setUv((float)((var5 - var9) * var11), (float)((var7 - var10) * var11));
         int var13 = 48;

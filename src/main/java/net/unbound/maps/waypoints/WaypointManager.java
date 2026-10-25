@@ -12,22 +12,20 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Locale;
 import java.util.UUID;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.ClientLevel;
-import net.minecraft.client.multiplayer.ServerData;
 import net.minecraft.client.resources.language.I18n;
 import net.minecraft.core.BlockPos;
 import net.minecraft.resources.ResourceKey;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.level.Level;
-import net.minecraft.world.level.storage.LevelResource;
 import net.neoforged.fml.loading.FMLPaths;
 import net.unbound.maps.UnboundConfig;
 import net.unbound.maps.UnboundMapsMod;
 import net.unbound.maps.api.ApiWaypoint;
 import net.unbound.maps.mapdata.MinimapTexture;
+import net.unbound.maps.util.StoragePaths;
 
 public final class WaypointManager {
     private static final Gson GSON = new GsonBuilder().setPrettyPrinting().create();
@@ -196,28 +194,11 @@ public final class WaypointManager {
     }
 
     private static Path resolveStorageDir(Minecraft var0) {
-        if (var0.getSingleplayerServer() != null) {
-            return var0.getSingleplayerServer().getWorldPath(LevelResource.ROOT).resolve("unboundmaps/waypoints");
-        } else {
-            ServerData var1 = var0.getCurrentServer();
-            String var2 = var1 == null ? "unknown" : sanitize(var1.ip);
-            return FMLPaths.GAMEDIR.get().resolve("unboundmaps/servers/" + var2);
-        }
+        return StoragePaths.waypoints(var0);
     }
 
     private static Path fileFor(ResourceKey<Level> var0) {
         ResourceLocation var1 = var0.location();
         return storageDir.resolve(var1.getNamespace() + "__" + var1.getPath() + ".json");
-    }
-
-    private static String sanitize(String var0) {
-        StringBuilder var1 = new StringBuilder();
-
-        for (char var5 : var0.toLowerCase(Locale.ROOT).toCharArray()) {
-            boolean var6 = var5 >= 'a' && var5 <= 'z' || var5 >= '0' && var5 <= '9' || var5 == '.' || var5 == '-' || var5 == '_';
-            var1.append(var6 ? var5 : '_');
-        }
-
-        return var1.length() > 64 ? var1.substring(0, 64) : var1.toString();
     }
 }

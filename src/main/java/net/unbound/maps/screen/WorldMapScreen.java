@@ -11,13 +11,17 @@ import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.client.resources.language.I18n;
+import net.minecraft.core.BlockPos;
 import net.minecraft.network.chat.Component;
 import net.minecraft.util.Mth;
+import net.minecraft.world.level.block.state.BlockState;
 import net.unbound.maps.UnboundConfig;
+import net.unbound.maps.UnboundMapsClient;
 import net.unbound.maps.UnboundMapsMod;
 import net.unbound.maps.mapdata.MapTileCache;
 import net.unbound.maps.mapdata.WorldMapCells;
 import net.unbound.maps.render.DrawHelper;
+import net.unbound.maps.render.MinimapHud;
 import net.unbound.maps.render.WaypointRenderer;
 import net.unbound.maps.util.TeleportUtil;
 import net.unbound.maps.waypoints.Waypoint;
@@ -69,6 +73,8 @@ public class WorldMapScreen extends Screen {
             Matrix4f var17 = var1.pose().last().pose();
             RenderSystem.enableBlend();
             RenderSystem.defaultBlendFunc();
+            float dimFactor = MinimapHud.mapDim(var5);
+            RenderSystem.setShaderColor(dimFactor, dimFactor, dimFactor, 1.0F);
 
             for (int var18 = var15; var18 <= var16; var18++) {
                 for (int var19 = var13; var19 <= var14; var19++) {
@@ -94,6 +100,7 @@ public class WorldMapScreen extends Screen {
                 }
             }
 
+            RenderSystem.setShaderColor(1.0F, 1.0F, 1.0F, 1.0F);
             RenderSystem.disableBlend();
             if (var5.player != null) {
                 double var35 = var6 / 2.0 + (var5.player.getX() - this.centerX) / this.blocksPerPixel;
@@ -120,15 +127,25 @@ public class WorldMapScreen extends Screen {
         int var7 = 0;
         int var8 = var5;
         int var9 = 0;
+        String blockName = null;
+        String biomeName = null;
         if (var6) {
             double var10 = this.centerX + (var2 - this.width / 2.0) * this.blocksPerPixel;
             double var12 = this.centerZ + (var3 - this.height / 2.0) * this.blocksPerPixel;
             var7 = Mth.floor(var10);
             var9 = Mth.floor(var12);
             var8 = MapTileCache.columnY(var4.level, var7, var9, var5);
+            BlockPos var13 = new BlockPos(var7, Math.max(var8, var4.level.getMinBuildHeight()), var9);
+            BlockState var14 = var4.level.getBlockState(var13);
+            blockName = var14.getBlock().getName().getString();
+            biomeName = var4.level
+                .getBiome(var13)
+                .unwrapKey()
+                .map(var0x -> Component.translatable(var0x.location().toLanguageKey("biome")).getString())
+                .orElse(null);
         }
 
-        String var14 = "X: "
+        String var14b = "X: "
             + var7
             + "  Y: "
             + var8
@@ -140,13 +157,21 @@ public class WorldMapScreen extends Screen {
             + (var7 >> 4)
             + ", "
             + (var9 >> 4);
-        if (MapTileCache.isCaveMode()) {
-            var14 = var14 + "  §6[" + I18n.get("gui.unboundmaps.caveLabel") + "]§r";
+        if (biomeName != null && !biomeName.isBlank()) {
+            var14b = var14b + "  |  " + biomeName;
         }
 
-        int var11 = var4.font.width(var14) + 12;
+        if (blockName != null && !blockName.isBlank()) {
+            var14b = var14b + "  |  " + blockName;
+        }
+
+        if (MapTileCache.isCaveMode()) {
+            var14b = var14b + "  §6[" + I18n.get("gui.unboundmaps.caveLabel") + "]§r";
+        }
+
+        int var11 = var4.font.width(var14b) + 12;
         var1.fill(this.width / 2 - var11 / 2, 4, this.width / 2 + var11 / 2, 18, -1945104364);
-        var1.drawCenteredString(var4.font, var14, this.width / 2, 8, -1643021);
+        var1.drawCenteredString(var4.font, var14b, this.width / 2, 8, -1643021);
     }
 
     private void openMenu(double var1, double var3) {
@@ -349,6 +374,7 @@ public class WorldMapScreen extends Screen {
             return true;
         } else if (var1 == 67) {
             MapTileCache.toggleCaveMode();
+            UnboundMapsClient.noteManualCaveToggle();
             return true;
         } else {
             return super.keyPressed(var1, var2, var3);

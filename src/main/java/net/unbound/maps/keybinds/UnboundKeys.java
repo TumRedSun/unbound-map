@@ -3,6 +3,7 @@ package net.unbound.maps.keybinds;
 import net.minecraft.client.KeyMapping;
 import net.minecraft.client.Minecraft;
 import net.neoforged.neoforge.client.event.RegisterKeyMappingsEvent;
+import net.unbound.maps.UnboundMapsClient;
 import net.unbound.maps.mapdata.MapTileCache;
 import net.unbound.maps.render.MinimapHud;
 import net.unbound.maps.screen.WaypointListScreen;
@@ -48,6 +49,7 @@ public final class UnboundKeys {
 
             while (TOGGLE_CAVE.consumeClick()) {
                 MapTileCache.toggleCaveMode();
+                UnboundMapsClient.noteManualCaveToggle();
             }
         }
     }
