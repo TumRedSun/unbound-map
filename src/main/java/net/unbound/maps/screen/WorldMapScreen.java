@@ -73,6 +73,11 @@ public class WorldMapScreen extends Screen {
     private String lastBlockQuery;
     private String lastBiomeQuery;
 
+    /** Current zoom of the world map (blocks per texture pixel), read by the cell cache for its LOD choice. */
+    public static double currentBlocksPerPixel() {
+        return blocksPerPixel;
+    }
+
     public WorldMapScreen() {
         super(Component.translatable("gui.unboundmaps.worldmap"));
     }
@@ -102,38 +107,46 @@ public class WorldMapScreen extends Screen {
             WorldMapCells.ensureVisible(var8, this.centerX, this.centerZ, var6, var7, this.blocksPerPixel);
             double var9 = this.centerX - var6 / 2.0 * this.blocksPerPixel;
             double var11 = this.centerZ - var7 / 2.0 * this.blocksPerPixel;
-            int var13 = Math.floorDiv(Mth.floor(var9), 512);
-            int var14 = Math.floorDiv(Mth.floor(var9 + var6 * this.blocksPerPixel), 512);
-            int var15 = Math.floorDiv(Mth.floor(var11), 512);
-            int var16 = Math.floorDiv(Mth.floor(var11 + var7 * this.blocksPerPixel), 512);
+            int stride = WorldMapCells.strideFor(this.blocksPerPixel);
+            int span = WorldMapCells.span(stride);
+            int var13 = Math.floorDiv(Mth.floor(var9), span);
+            int var14 = Math.floorDiv(Mth.floor(var9 + var6 * this.blocksPerPixel), span);
+            int var15 = Math.floorDiv(Mth.floor(var11), span);
+            int var16 = Math.floorDiv(Mth.floor(var11 + var7 * this.blocksPerPixel), span);
             Matrix4f var17 = var1.pose().last().pose();
             RenderSystem.enableBlend();
             RenderSystem.defaultBlendFunc();
+            // uniform Xaero-like night dim as a draw-time tint (cave view is exempt:
+            // it is lit by block light, not by the sun); baked tiles are shared
+            // between day and night, so no re-bake happens when the sky darkens
+            float nightF = MapTileCache.nightFactor();
+            RenderSystem.setShaderColor(nightF, nightF, nightF, 1.0F);
 
             for (int var18 = var15; var18 <= var16; var18++) {
                 for (int var19 = var13; var19 <= var14; var19++) {
                     WorldMapCells.Cell var20 = WorldMapCells.cell(var19, var18);
                     if (var20 != null) {
-                        float var21 = (float)(var19 * 512L);
-                        float var22 = (float)(var18 * 512L);
-                        float var23 = (float)((var21 - var9) / this.blocksPerPixel);
-                        float var24 = (float)((var22 - var11) / this.blocksPerPixel);
-                        float var25 = (float)(512.0 / this.blocksPerPixel);
-                        float var26 = Math.max(var23, 0.0F);
-                        float var27 = Math.max(var24, 0.0F);
-                        float var28 = Math.min(var23 + var25, (float)var6);
-                        float var29 = Math.min(var24 + var25, (float)var7);
+                        double originX = (double)var19 * span;
+                        double originZ = (double)var18 * span;
+                        double sx = (originX - var9) / this.blocksPerPixel;
+                        double sy = (originZ - var11) / this.blocksPerPixel;
+                        double sw = (double)span / this.blocksPerPixel;
+                        float var26 = (float)Math.max(sx, 0.0);
+                        float var27 = (float)Math.max(sy, 0.0);
+                        float var28 = (float)Math.min(sx + sw, (double)var6);
+                        float var29 = (float)Math.min(sy + sw, (double)var7);
                         if (!(var28 <= var26) && !(var29 <= var27)) {
-                            float var30 = (var26 - var23) / var25;
-                            float var31 = (var27 - var24) / var25;
-                            float var32 = (var28 - var23) / var25;
-                            float var33 = (var29 - var24) / var25;
+                            float var30 = (float)((var26 - sx) / sw);
+                            float var31 = (float)((var27 - sy) / sw);
+                            float var32 = (float)((var28 - sx) / sw);
+                            float var33 = (float)((var29 - sy) / sw);
                             DrawHelper.texturedQuad(var17, var20.location, var26, var27, var28, var29, var30, var31, var32, var33);
                         }
                     }
                 }
             }
 
+            RenderSystem.setShaderColor(1.0F, 1.0F, 1.0F, 1.0F);
             RenderSystem.enableBlend();
             RenderSystem.defaultBlendFunc();
             if (var2 >= 0 && var3 >= 0 && var2 < var6 && var3 < var7) {
@@ -911,7 +924,11 @@ public class WorldMapScreen extends Screen {
         // 2) stored chunks: the whole explored map from the persistent store
         if (var5.size() < 512 && MapStore.isEnabled()) {
             ClientLevel level = var9;
-            MapStore.forEachStoredChunk((pos, palette, cols) -> {
+            List<WorldMapScreen.BiomeSig> sigs = this.buildBiomeSignatures(var9);
+            List<WorldMapScreen.BiomeSig> matchingSigs = sigs == null
+                ? List.of()
+                : sigs.stream().filter(s -> this.biomeIdMatches(s.id, norm, false, null)).toList();
+            MapStore.forEachStoredChunk((pos, heights, colors, palette, cols) -> {
                 if (var5.size() >= 512) {
                     return;
                 }
@@ -920,17 +937,40 @@ public class WorldMapScreen extends Screen {
                 if (level.getChunk(cx, cz, ChunkStatus.FULL, false) != null) {
                     return; // already covered by the live scan
                 }
-                for (int i = 0; i < 256; i++) {
-                    int idx = cols[i] & 0xFF;
-                    if (idx == 0xFF || idx >= palette.length) {
-                        continue;
+                if (palette != null && palette.length > 0 && cols != null) {
+                    // exact: per-column biome palette recorded since 1.6.0
+                    for (int i = 0; i < 256; i++) {
+                        int idx = cols[i] & 0xFF;
+                        if (idx == 0xFF || idx >= palette.length) {
+                            continue;
+                        }
+                        if (this.biomeIdMatches(palette[idx], norm, tagQuery, tagRl)) {
+                            int y = heights != null && heights[i] != Integer.MIN_VALUE ? heights[i] - 1 : 64;
+                            String label = this.biomeIdLabel(palette[idx]);
+                            var5.add(new WorldMapScreen.SearchHit(cx * 16 + (i & 15), y, cz * 16 + (i >> 4), label, -13996851));
+                            break;
+                        }
                     }
-                    if (this.biomeIdMatches(palette[idx], norm, tagQuery, tagRl)) {
-                        int[] heights = MapStore.storedHeights(level.dimension(), pos);
-                        int y = heights != null && heights[i] != Integer.MIN_VALUE ? heights[i] - 1 : 64;
-                        String label = this.biomeIdLabel(palette[idx]);
-                        var5.add(new WorldMapScreen.SearchHit(cx * 16 + (i & 15), y, cz * 16 + (i >> 4), label, -13996851));
-                        break;
+                } else if (!matchingSigs.isEmpty() && colors != null && !tagQuery) {
+                    // legacy chunk (explored before biome palettes were stored):
+                    // match the stored surface color against biome tint signatures.
+                    // Hillshade and water depth scale all channels uniformly, so the
+                    // normalized color still identifies the biome tint applied at
+                    // explore time. Best-effort for old data only.
+                    for (int i = 0; i < 256 && var5.size() < 512; i++) {
+                        int color = colors[i];
+                        if (color == MapTileCache.UNKNOWN || (color >>> 24) != 0xFF) {
+                            continue;
+                        }
+                        for (WorldMapScreen.BiomeSig sig : matchingSigs) {
+                            if (sig.matches(color)) {
+                                int y = heights != null && heights[i] != Integer.MIN_VALUE ? heights[i] - 1 : 64;
+                                var5.add(new WorldMapScreen.SearchHit(
+                                    cx * 16 + (i & 15), y, cz * 16 + (i >> 4), this.biomeIdLabel(sig.id), -13996851
+                                ));
+                                break;
+                            }
+                        }
                     }
                 }
             });
@@ -1018,6 +1058,74 @@ public class WorldMapScreen extends Screen {
         }
 
         return !var2 && var4.getPath().toLowerCase(Locale.ROOT).replace('_', ' ').contains(var1);
+    }
+
+    /**
+     * Color signatures for the LEGACY biome search (chunks explored before biome
+     * palettes were stored). The stored color of a column is
+     * {@code baseMapColor * biomeTint * hillshade}: hillshade scales all channels
+     * uniformly, so the normalized RGB identifies the biome that tinted it.
+     * Each biome gets four candidates: grass tint on the grass-block map color,
+     * grass tint on the plant map color, foliage tint on the foliage map color
+     * and the biome water color.
+     */
+    private record BiomeSig(String id, float r, float g, float b) {
+        static final float TOLERANCE = 0.06F;
+
+        /** Normalized RGB (sum = 1) of an ARGB-ish tint color. */
+        private static float[] norm(int r, int g, int b) {
+            float sum = r + g + b;
+            return sum <= 0.0F ? new float[]{0.0F, 0.0F, 0.0F} : new float[]{r / sum, g / sum, b / sum};
+        }
+
+        static BiomeSig of(String id, int baseRgb, int tintRgb) {
+            float[] n = norm(
+                (baseRgb >> 16 & 0xFF) * (tintRgb >> 16 & 0xFF),
+                (baseRgb >> 8 & 0xFF) * (tintRgb >> 8 & 0xFF),
+                (baseRgb & 0xFF) * (tintRgb & 0xFF)
+            );
+            return new BiomeSig(id, n[0], n[1], n[2]);
+        }
+
+        static BiomeSig plain(String id, int rgb) {
+            float[] n = norm(rgb >> 16 & 0xFF, rgb >> 8 & 0xFF, rgb & 0xFF);
+            return new BiomeSig(id, n[0], n[1], n[2]);
+        }
+
+        /** L1 match against a stored ABGR column color (uniform brightness is ignored). */
+        boolean matches(int storedAbgr) {
+            float[] n = norm(storedAbgr & 0xFF, storedAbgr >>> 8 & 0xFF, storedAbgr >>> 16 & 0xFF);
+            return Math.abs(n[0] - this.r) + Math.abs(n[1] - this.g) + Math.abs(n[2] - this.b) < TOLERANCE;
+        }
+    }
+
+    /** All biome color signatures of the current dimension's biome registry (null on failure). */
+    private List<WorldMapScreen.BiomeSig> buildBiomeSignatures(ClientLevel var0) {
+        try {
+            net.minecraft.core.Registry<Biome> var1 = var0.registryAccess().registryOrThrow(Registries.BIOME);
+            int grassBase = net.minecraft.world.level.material.MapColor.GRASS.col & 0xFFFFFF;
+            int plantBase = net.minecraft.world.level.material.MapColor.PLANT.col & 0xFFFFFF;
+            List<WorldMapScreen.BiomeSig> var2 = new ArrayList<>();
+            for (Holder.Reference<Biome> var3 : var1.holders().toList()) {
+                String var4 = var1.getKey(var3.value()).toString();
+                Biome var5 = var3.value();
+                int var6;
+                int var7;
+                try {
+                    var6 = var5.getGrassColor(0.0, 0.0);
+                    var7 = var5.getFoliageColor();
+                } catch (Exception var8) {
+                    continue;
+                }
+                var2.add(WorldMapScreen.BiomeSig.of(var4, grassBase, var6));
+                var2.add(WorldMapScreen.BiomeSig.of(var4, plantBase, var6));
+                var2.add(WorldMapScreen.BiomeSig.of(var4, plantBase, var7));
+                var2.add(WorldMapScreen.BiomeSig.plain(var4, var5.getWaterColor()));
+            }
+            return var2;
+        } catch (Exception var9) {
+            return null;
+        }
     }
 
     /** Matches a block against the query: #tag, registry id (mod:block), translation key or localized name. */

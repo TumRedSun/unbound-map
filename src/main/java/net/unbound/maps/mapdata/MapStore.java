@@ -34,12 +34,11 @@ import net.unbound.maps.util.StoragePaths;
  * Persistent store for explored map data, kept per server/world and per dimension.
  * <p>
  * Chunks are packed into 32x32-chunk region files ({@code r.<rx>.<rz>.bin}, gzip-compressed
- * binary: 256 tile colors + 256 surface heights per chunk, format v2 also stores per-column
- * sky/block light and the surface biome palette so day/night lighting and the biome search
- * work on the WHOLE explored map, not only on loaded chunks). Discovered biomes and
- * blocks go into a human-readable {@code discovery.json}. Everything is written lazily:
- * dirty regions are flushed by {@link #saveDirty()} on an autosave timer, on dimension
- * change and on logout.
+ * binary: 256 tile colors + 256 surface heights per chunk, v2 also stores the surface biome
+ * palette so the biome search works on the WHOLE explored map, not only on loaded chunks).
+ * Discovered biomes and blocks go into a human-readable {@code discovery.json}. Everything
+ * is written lazily: dirty regions are flushed by {@link #saveDirty()} on an autosave timer,
+ * on dimension change and on logout.
  */
 public final class MapStore {
     private static final int REGION_BITS = 5;
@@ -100,21 +99,18 @@ public final class MapStore {
     }
 
     /**
-     * Records a freshly computed live chunk: colors (hillshaded, WITHOUT light -
-     * light is stored separately as sky/block nibbles and applied dynamically at
-     * render time, so night falls on the whole explored map), heights, the surface
-     * biome palette (for the biome search on stored chunks) and all biomes/blocks seen.
+     * Records a freshly computed live chunk: colors (hillshaded, full-bright), heights,
+     * the surface biome palette (for the biome search on stored chunks) and all biomes/blocks seen.
      */
     public static void chunkExplored(
         ResourceKey<Level> var0,
         long var1,
         int[] var2,
         int[] var3,
-        byte[] var4,
-        String[] var5,
-        byte[] var6,
-        java.util.Set<String> var7,
-        java.util.Set<String> var8
+        String[] var4,
+        byte[] var5,
+        java.util.Set<String> var6,
+        java.util.Set<String> var7
     ) {
         if (!enabled || var0 == null) {
             return;
@@ -125,25 +121,25 @@ public final class MapStore {
         if (dimensionDir == null) {
             return;
         }
-        int var9 = ChunkPos.getX(var1);
-        int var10 = ChunkPos.getZ(var1);
-        long var11 = regionKey(var9, var10);
-        Region var13 = region(var11);
-        var13.chunks.put(var1, new ChunkData(var2.clone(), var3.clone(), var4, var5, var6));
-        var13.dirty = true;
-        DIRTY_REGIONS.add(var11);
-        if (!var7.isEmpty()) {
-            BIOMES.addAll(var7);
+        int var8 = ChunkPos.getX(var1);
+        int var9 = ChunkPos.getZ(var1);
+        long var10 = regionKey(var8, var9);
+        Region var11 = region(var10);
+        var11.chunks.put(var1, new ChunkData(var2.clone(), var3.clone(), var4, var5));
+        var11.dirty = true;
+        DIRTY_REGIONS.add(var10);
+        if (!var6.isEmpty()) {
+            BIOMES.addAll(var6);
             discoveryDirty = true;
         }
-        if (!var8.isEmpty()) {
-            BLOCKS.addAll(var8);
+        if (!var7.isEmpty()) {
+            BLOCKS.addAll(var7);
             discoveryDirty = true;
         }
     }
 
-    /** Everything stored about one chunk. {@code light} is sky<<?4|block nibbles (0xFF = unknown). */
-    public record StoredChunk(int[] colors, int[] heights, byte[] light, String[] biomePalette, byte[] columnBiomes) {
+    /** Everything stored about one chunk. */
+    public record StoredChunk(int[] colors, int[] heights, String[] biomePalette, byte[] columnBiomes) {
     }
 
     /** Returns all stored data of an unloaded chunk, or null when never explored. */
@@ -153,7 +149,7 @@ public final class MapStore {
         }
         Region var2 = region(regionKey(ChunkPos.getX(var1), ChunkPos.getZ(var1)));
         ChunkData var3 = var2.chunks.get(var1);
-        return var3 == null ? null : new StoredChunk(var3.colors, var3.heights, var3.light, var3.biomePalette, var3.columnBiomes);
+        return var3 == null ? null : new StoredChunk(var3.colors, var3.heights, var3.biomePalette, var3.columnBiomes);
     }
 
     /** Returns the stored colors of an unloaded chunk, or null when never explored. */
@@ -168,57 +164,73 @@ public final class MapStore {
         return var2 == null ? null : var2.heights;
     }
 
-    /** Visitor over every stored chunk that has biome data (used by the biome search). */
+    /** Visitor over every stored chunk (used by the biome search). */
     public interface ChunkBiomeVisitor {
-        void accept(long chunkPos, String[] biomePalette, byte[] columnBiomes);
+        void accept(long chunkPos, int[] heights, int[] colors, String[] biomePalette, byte[] columnBiomes);
     }
 
     /**
      * Walks every stored chunk of the current dimension (regions cached in memory
      * first, then every region file on disk) that carries biome column data.
-     * Loading a big explored map can touch many files, so callers should run it
-     * only on an explicit user action (Enter in the search bar).
+     * The visitor receives the stored heights as well, so it never needs to call
+     * back into the region cache - that re-entrancy used to corrupt iteration of
+     * the access-order region map (ConcurrentModificationException) and abort the
+     * scan halfway. Loading a big explored map can touch many files, so callers
+     * should run it only on an explicit user action (Enter in the search bar).
      */
     public static void forEachStoredChunk(ChunkBiomeVisitor var0) {
         if (!enabled || dimensionDir == null) {
             return;
         }
-        for (Map.Entry<Long, Region> var2 : REGIONS.entrySet()) {
-            visitRegion(var2.getValue(), var0);
-        }
-        if (!Files.isDirectory(dimensionDir)) {
-            return;
-        }
-        try (var var3 = Files.list(dimensionDir)) {
-            for (Path var5 : var3.toList()) {
-                String var6 = var5.getFileName().toString();
-                if (!var6.startsWith("r.") || !var6.endsWith(".bin")) {
-                    continue;
-                }
-                String[] var7 = var6.substring(2, var6.length() - 4).split("\\.");
-                if (var7.length != 2) {
-                    continue;
-                }
-                try {
-                    long var8 = ((long)Integer.parseInt(var7[0]) & 0xFFFFFFFFL) << 32 | (long)Integer.parseInt(var7[1]) & 0xFFFFFFFFL;
-                    if (REGIONS.containsKey(var8)) {
-                        continue;
+        try {
+            // snapshot first: visiting a chunk must not mutate REGIONS while we iterate it
+            java.util.List<Long> var1 = new ArrayList<>(REGIONS.keySet());
+            java.util.List<Long> var2 = new ArrayList<>();
+            if (Files.isDirectory(dimensionDir)) {
+                try (var var3 = Files.list(dimensionDir)) {
+                    for (Path var5 : var3.toList()) {
+                        String var6 = var5.getFileName().toString();
+                        if (!var6.startsWith("r.") || !var6.endsWith(".bin")) {
+                            continue;
+                        }
+                        String[] var7 = var6.substring(2, var6.length() - 4).split("\\.");
+                        if (var7.length != 2) {
+                            continue;
+                        }
+                        try {
+                            long var8 = ((long)Integer.parseInt(var7[0]) & 0xFFFFFFFFL) << 32
+                                | (long)Integer.parseInt(var7[1]) & 0xFFFFFFFFL;
+                            if (!var1.contains(var8)) {
+                                var2.add(var8);
+                            }
+                        } catch (NumberFormatException var10) {
+                        }
                     }
-                    visitRegion(region(var8), var0);
-                } catch (NumberFormatException var10) {
                 }
             }
-        } catch (Exception var11) {
-            UnboundMapsMod.LOGGER.warn("Unbound Maps: biome scan over stored regions failed: {}", var11.toString());
+
+            for (long var11 : var1) {
+                Region var12 = REGIONS.get(var11);
+                if (var12 != null) {
+                    visitRegion(var12, var0);
+                }
+            }
+
+            for (long var13 : var2) {
+                Region var14 = region(var13);
+                visitRegion(var14, var0);
+            }
+        } catch (Exception var15) {
+            UnboundMapsMod.LOGGER.warn("Unbound Maps: biome scan over stored regions failed: {}", var15.toString());
         }
     }
 
     private static void visitRegion(Region var0, ChunkBiomeVisitor var1) {
         for (Map.Entry<Long, ChunkData> var3 : var0.chunks.entrySet()) {
             ChunkData var4 = var3.getValue();
-            if (var4.biomePalette != null && var4.columnBiomes != null) {
-                var1.accept(var3.getKey(), var4.biomePalette, var4.columnBiomes);
-            }
+            // every stored chunk is passed: chunks without a biome palette (legacy
+            // data) are matched by the caller against biome color signatures
+            var1.accept(var3.getKey(), var4.heights, var4.colors, var4.biomePalette, var4.columnBiomes);
         }
     }
 
@@ -278,13 +290,14 @@ public final class MapStore {
                 for (int var12 = 0; var12 < 256; var12++) {
                     var11[var12] = var3.readShort();
                 }
-                byte[] var13 = null;
                 String[] var14 = null;
                 byte[] var15 = null;
                 if (var5b) {
-                    var13 = new byte[256];
+                    // v2 stored per-column sky/block light nibbles; they were sampled
+                    // with a buggy position (inside the surface block) and are now
+                    // ignored - the bytes are still consumed to stay format-compatible
                     for (int var16 = 0; var16 < 256; var16++) {
-                        var13[var16] = (byte)var3.readByte();
+                        var3.readByte();
                     }
                     if (var3.readByte() != 0) {
                         int var17 = var3.readByte() & 0xFF;
@@ -298,7 +311,7 @@ public final class MapStore {
                         }
                     }
                 }
-                var1.chunks.put(var7, new ChunkData(var9, var11, var13, var14, var15));
+                var1.chunks.put(var7, new ChunkData(var9, var11, var14, var15));
             }
             var3.close();
         } catch (Exception var13) {
@@ -329,14 +342,9 @@ public final class MapStore {
                 for (int var9 = 0; var9 < 256; var9++) {
                     var4.writeShort(var7.heights[var9]);
                 }
-                if (var7.light != null) {
-                    for (int var10 = 0; var10 < 256; var10++) {
-                        var4.writeByte(var7.light[var10] & 0xFF);
-                    }
-                } else {
-                    for (int var11 = 0; var11 < 256; var11++) {
-                        var4.writeByte(255);
-                    }
+                // legacy v2 light block: always "unknown", kept for format compatibility
+                for (int var10 = 0; var10 < 256; var10++) {
+                    var4.writeByte(255);
                 }
                 if (var7.biomePalette != null && var7.columnBiomes != null && var7.biomePalette.length > 0) {
                     var4.writeByte(1);
@@ -447,7 +455,7 @@ public final class MapStore {
         boolean dirty;
     }
 
-    private record ChunkData(int[] colors, int[] heights, byte[] light, String[] biomePalette, byte[] columnBiomes) {
+    private record ChunkData(int[] colors, int[] heights, String[] biomePalette, byte[] columnBiomes) {
     }
 
     /** Minimal little-endian stream adapter (avoids pulling the full java.io data classes into the hot path). */

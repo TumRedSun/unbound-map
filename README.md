@@ -22,8 +22,9 @@ and it does not pretend to be them. Addons should integrate through the stable p
 - **Map shading** (all toggleable in the client config):
   - terrain depth (cross-chunk hillshade, slopes facing the light are brightened)
   - biome colors (grass/foliage/water per biome — swamp, jungle, badlands, ...)
-  - light shading (roofs and caves darken, torches glow in cave mode)
-  - night dimming of the whole map
+  - light shading (cave mode tiles are lit by block light, torches glow)
+  - a gentle Xaero-like night dim applied as a draw-time tint: the surface map
+    stays fully readable around the clock (full-bright colors, like Xaero)
 - Full-screen world map with drag panning, scroll zoom and a right-click context menu
   (edit/delete waypoint, create waypoint, "Teleport here" — the command template is
   configurable in the client config, e.g. `/tp @s {x} {y} {z}` or an `/execute in` variant)
@@ -35,7 +36,10 @@ and it does not pretend to be them. Addons should integrate through the stable p
   water keeps the top view) and switches to a slice that follows the player while
   mining or diving. Any other position pins both maps to one fixed Y level. `C`
   toggles between Auto and "pin at my height", `,` / `.` (or the left / right arrow
-  keys on the world map) step the height by 8 blocks; the slice range is configurable
+  keys on the world map) step the height by 8 blocks; the slice range is configurable.
+  The cut-lid view covers the **whole explored map**: loaded chunks render the real
+  slice, explored-but-unloaded chunks are rebuilt from the persistent store
+  (surface below the view height) or shown as a dark silhouette (terrain above it)
 - **Persistent explored map** per server/world and per dimension: chunk colors and
   heights are saved to region files (gzip), the list of seen biomes and blocks goes to
   a readable `discovery.json`; unexplored-but-unloaded chunks keep rendering from the
@@ -45,6 +49,8 @@ and it does not pretend to be them. Addons should integrate through the stable p
   death points, in-world beacon beams and on-screen floating labels
 - A small API (`net.unbound.maps.api.UnboundMapsApi`) for other mods to add / remove /
   list waypoints
+- The world map bakes its tiles progressively (a per-frame budget) and uses block
+  stride LOD when zoomed far out, so panning and zooming stay smooth even on huge maps
 
 ## Building
 

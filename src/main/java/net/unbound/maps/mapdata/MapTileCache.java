@@ -42,7 +42,6 @@ public final class MapTileCache {
     public static final int UNKNOWN = -15723752;
     private static final int MAX_ENTRIES = 40000;
     private static final int MAX_SLICE_ENTRIES = 8000;
-    private static final int SLICE_BUCKET_BITS = 3;
     private static final Map<Long, MapTileCache.Entry> CHUNKS = new LinkedHashMap<>(4096, 0.75F, true);
     private static final Map<Integer, Map<Long, MapTileCache.Entry>> SLICES = new HashMap<>();
     private static boolean cave;
@@ -52,9 +51,13 @@ public final class MapTileCache {
         0.10F, 0.13F, 0.16F, 0.19F, 0.22F, 0.25F, 0.29F, 0.33F,
         0.38F, 0.43F, 0.49F, 0.56F, 0.64F, 0.73F, 0.85F, 1.00F
     };
-    /** How much of the sky light is removed at full night. 0.50 keeps the map readable, like Xaero. */
-    private static final float NIGHT_DIM_STRENGTH = 0.50F;
-    private static int lastDarken = -1;
+    /**
+     * How much of the sky brightness is removed at full night. The dim is applied
+     * UNIFORMLY at draw time (RenderSystem shader color), like a gentle evening
+     * filter - the map keeps Xaero-level readability, torch/lava glow stays baked
+     * into slice (cave) tiles only.
+     */
+    private static final float NIGHT_DIM_STRENGTH = 0.22F;
     private static boolean nightDim = true;
     /** Global look: gentle gamma lift (brighter mids) + mild saturation boost, applied to every rendered pixel. */
     private static final int[] ENHANCE_LUT = new int[256];
@@ -98,102 +101,39 @@ public final class MapTileCache {
             MinimapTexture.invalidateAll();
         }
 
-        // Dynamic day/night: when the sky darkness level changes, surface tiles
-        // are re-baked so the map brightens at dawn and darkens at dusk while
-        // torch/lava light keeps glowing. Slice tiles are block-light driven
-        // and are intentionally not re-scanned here.
         nightDim = flag(UnboundConfig.NIGHT_DIM, true);
-        Minecraft mc = Minecraft.getInstance();
-        if (mc.level != null) {
-            int darken = mc.level.getSkyDarken();
-            if (darken != lastDarken) {
-                lastDarken = darken;
-                CHUNKS.clear();
-                MinimapTexture.invalidateAll();
-            }
-        }
     }
 
     /**
-     * Xaero-like "living" light: block light (torches, lava, glowstone) always
-     * keeps its glow, sky light is scaled by the current day/night level.
+     * Uniform day/night dim factor for surface map tiles, applied at draw time via
+     * RenderSystem.setShaderColor: 1.0 at day, ~0.78 at full night. Cave mode is
+     * exempt (it is lit by block light, not by the sun). The surface colors no
+     * longer depend on the time of day, so baked tiles are shared between day and
+     * night and never re-bake when the sky darkens.
      */
-    private static float lightShade(ClientLevel var0, int var1, int var2, boolean var3) {
+    public static float nightFactor() {
+        if (!nightDim || MapTileCache.cave) {
+            return 1.0F;
+        }
+        Minecraft mc = Minecraft.getInstance();
+        if (mc.level == null) {
+            return 1.0F;
+        }
+        return 1.0F - NIGHT_DIM_STRENGTH * (float)mc.level.getSkyDarken() / 15.0F;
+    }
+
+    /**
+     * Xaero-like light for the cave (slice) view only: block light (torches, lava,
+     * glowstone) keeps its glow, sky light in the cavity follows the day cycle.
+     */
+    private static float lightShade(ClientLevel var0, int var1, int var2) {
         float var4 = LIGHT_CURVE[var2 & 15];
         float var5 = LIGHT_CURVE[var1 & 15];
-        if (var3 && nightDim) {
+        if (nightDim) {
             var5 *= 1.0F - NIGHT_DIM_STRENGTH * (float)var0.getSkyDarken() / 15.0F;
         }
 
-        return Math.max(0.10F, Math.max(var4, var5));
-    }
-
-    /** Current sky darkness (0 = day, 15 = full night). */
-    private static int currentDarken() {
-        Minecraft mc = Minecraft.getInstance();
-        return mc.level != null ? mc.level.getSkyDarken() : 0;
-    }
-
-    /**
-     * Samples sky/block light per pixel WITHOUT touching the colors and returns
-     * one byte per pixel: sky<<4 | block. Stored in the persistent map, so the
-     * day/night cycle replays over every explored chunk, loaded or not.
-     */
-    private static byte[] captureLight(ClientLevel var0, int var1, int var2, MapTileCache.Entry var3) {
-        byte[] var4 = new byte[256];
-        int var5 = var0.getMinBuildHeight();
-        MutableBlockPos var6 = new MutableBlockPos();
-
-        for (int var7 = 0; var7 < 256; var7++) {
-            if (var3.colors[var7] != UNKNOWN) {
-                var6.set((var1 << 4) + (var7 & 15), Math.max(var3.heights[var7] - 1, var5), (var2 << 4) + (var7 >> 4));
-                var4[var7] = (byte)(var0.getBrightness(LightLayer.SKY, var6) << 4 | var0.getBrightness(LightLayer.BLOCK, var6));
-            } else {
-                var4[var7] = -1;
-            }
-        }
-
-        return var4;
-    }
-
-    /**
-     * Applies the day/night look to a STORED entry using the light captured when
-     * the chunk was explored. Old (v1) chunks have the daylight look baked in and
-     * no light data, so they get a uniform dim instead - still far better than
-     * staying full-bright at night.
-     */
-    private static void applyStoredLight(MapTileCache.Entry var0, int var1) {
-        float var2 = nightDim ? 1.0F - NIGHT_DIM_STRENGTH * (float)var1 / 15.0F : 1.0F;
-
-        for (int var3 = 0; var3 < 256; var3++) {
-            if (var0.colors[var3] != UNKNOWN) {
-                if (var0.light != null) {
-                    int var4 = var0.light[var3] & 0xFF;
-                    if (var4 != 0xFF) {
-                        float var5 = Math.max(LIGHT_CURVE[var4 & 15], LIGHT_CURVE[var4 >> 4] * var2);
-                        var0.colors[var3] = shadeAbgr(var0.colors[var3], Math.max(0.10F, var5));
-                    }
-                } else {
-                    var0.colors[var3] = shadeAbgr(var0.colors[var3], Math.max(0.45F, var2));
-                }
-            }
-        }
-    }
-
-    /**
-     * Multiplies a freshly computed entry by the dynamic light from captured
-     * nibbles (same sampling positions as the old per-pixel applyLight).
-     */
-    private static void applyLightNibbles(MapTileCache.Entry var0, byte[] var1, boolean var2) {
-        float var3 = var2 && nightDim ? 1.0F - NIGHT_DIM_STRENGTH * (float)currentDarken() / 15.0F : 1.0F;
-
-        for (int var4 = 0; var4 < 256; var4++) {
-            int var5 = var1[var4] & 0xFF;
-            if (var0.colors[var4] != UNKNOWN && var5 != 0xFF) {
-                float var6 = Math.max(LIGHT_CURVE[var5 & 15], LIGHT_CURVE[var5 >> 4] * var3);
-                var0.colors[var4] = shadeAbgr(var0.colors[var4], Math.max(0.10F, var6));
-            }
-        }
+        return Math.max(0.14F, Math.max(var4, var5));
     }
 
     /**
@@ -347,8 +287,12 @@ public final class MapTileCache {
     }
 
     /**
-     * Computes a chunk entry from live world data (biome tint + water tint + light),
+     * Computes a chunk entry from live world data (biome tint + water tint),
      * falling back to the persistent store when the chunk is unloaded.
+     * Surface colors are full-bright Xaero-style: map color + biome tint + water
+     * depth + hillshade. Day/night is a uniform draw-time dim ({@link #nightFactor()}),
+     * so tiles never depend on the time of day (the old per-column light capture
+     * sampled the sky INSIDE opaque surface blocks and blacked out the land at night).
      * When {@code allowShade} is true the hillshade pass runs immediately;
      * neighbors needed by it are pre-computed raw (one level of recursion at most).
      */
@@ -359,13 +303,11 @@ public final class MapTileCache {
             if (MapStore.isEnabled()) {
                 MapStore.StoredChunk var7 = MapStore.storedChunk(var0.dimension(), var4);
                 if (var7 != null) {
-                    MapTileCache.Entry var8 = new MapTileCache.Entry(
+                    // stored light nibbles (v2 format) were captured with the old buggy
+                    // sampling and are intentionally ignored: surface tiles are full-bright
+                    return new MapTileCache.Entry(
                         var7.colors(), var7.heights() == null ? defaultHeights() : var7.heights(), true, true
                     );
-                    var8.light = var7.light();
-                    // day/night replays over the WHOLE explored map, not only near the player
-                    applyStoredLight(var8, currentDarken());
-                    return var8;
                 }
             }
 
@@ -436,29 +378,17 @@ public final class MapTileCache {
                 shadeEntry(var0, var1, var2, var34);
             }
 
-            boolean var35 = flag(UnboundConfig.LIGHT_SHADING, true);
-            byte[] var36 = null;
-            if (var35) {
-                // sample sky/block light once: stored with the chunk (day/night on the
-                // whole explored map) and applied to the live colors right after
-                var36 = captureLight(var0, var1, var2, var34);
-            }
-
             if (var3 && var31) {
-                recordToStore(var0, var1, var2, var4, var34, var36);
-            }
-
-            if (var36 != null) {
-                applyLightNibbles(var34, var36, true);
+                recordToStore(var0, var1, var2, var4, var34);
             }
 
             return var34;
         }
     }
 
-    /** Persists a chunk: hillshaded colors WITHOUT light, light nibbles, surface biome palette, discovery sets. */
+    /** Persists a chunk: hillshaded full-bright colors, surface biome palette, discovery sets. */
     private static void recordToStore(
-        ClientLevel var0, int var1, int var2, long var3, MapTileCache.Entry var5, byte[] var6
+        ClientLevel var0, int var1, int var2, long var3, MapTileCache.Entry var5
     ) {
         java.util.Set<String> var7 = new java.util.HashSet<>();
         java.util.Set<String> var8 = new java.util.HashSet<>();
@@ -504,7 +434,7 @@ public final class MapTileCache {
         }
 
         MapStore.chunkExplored(
-            var0.dimension(), var3, var5.colors, var5.heights, var6, var10.toArray(new String[0]), var12, var7, var8
+            var0.dimension(), var3, var5.colors, var5.heights, var10.toArray(new String[0]), var12, var7, var8
         );
     }
 
@@ -609,7 +539,9 @@ public final class MapTileCache {
     private static MapTileCache.Entry computeSliceChunk(ClientLevel var0, int var1, int var2, int var3) {
         ChunkAccess var4 = var0.getChunk(var1, var2, ChunkStatus.FULL, false);
         if (var4 == null) {
-            return null;
+            // explored-but-unloaded chunk: rebuild the cut-lid view approximately
+            // from the persistent store, so cave mode covers the WHOLE explored map
+            return storedSliceChunk(var0, var1, var2, var3);
         } else {
             boolean var29 = flag(UnboundConfig.LIGHT_SHADING, true);
             int var5 = bucketCenterY(var3);
@@ -653,18 +585,65 @@ public final class MapTileCache {
                             var13.set(var11 + var14, Math.min(var17 + 1, var8 - 1), var12 + var15);
                             int var22 = var0.getBrightness(LightLayer.SKY, var13);
                             int var23 = var0.getBrightness(LightLayer.BLOCK, var13);
-                            var19 = shadeAbgr(var19, lightShade(var0, var22, var23, true));
+                            var19 = shadeAbgr(var19, lightShade(var0, var22, var23));
                         }
 
-                        float var24 = 1.0F
-                            - Math.min((float)Math.abs(var17 - var5) / (float)Math.max(1, var6), 1.0F) * 0.22F;
-                        var10[var16] = shadeAbgr(var19, var24);
+                        var10[var16] = shadeAbgr(var19, sliceDepthDim(var17, var5, var6));
                     }
                 }
             }
 
             return new MapTileCache.Entry(var10, var9, true, false);
         }
+    }
+
+    /** Depth fade used by the cut-lid view: columns far below the view height get slightly darker. */
+    private static float sliceDepthDim(int var0, int var1, int var2) {
+        return 1.0F - Math.min((float)Math.abs(var0 - var1) / (float)Math.max(1, var2), 1.0F) * 0.22F;
+    }
+
+    /**
+     * Approximate cut-lid for an explored-but-unloaded chunk, rebuilt from the
+     * persistent store (colors + surface heights, no per-block data):
+     * - columns whose real surface lies at/below the view height render exactly
+     *   like the surface map with the usual depth fade (plains, ocean floors,
+     *   valley bottoms);
+     * - columns whose terrain rises above the view height are "underground":
+     *   they show a dark silhouette of the terrain, like Xaero's unlit cave view.
+     */
+    private static MapTileCache.Entry storedSliceChunk(ClientLevel var0, int var1, int var2, int var3) {
+        if (!MapStore.isEnabled()) {
+            return null;
+        }
+
+        MapStore.StoredChunk var4 = MapStore.storedChunk(var0.dimension(), ChunkPos.asLong(var1, var2));
+        if (var4 == null) {
+            return null;
+        }
+
+        int var5 = bucketCenterY(var3);
+        int var6 = sliceRange() * 2;
+        int[] var7 = var4.colors();
+        int[] var8 = var4.heights() == null ? defaultHeights() : var4.heights();
+        int[] var9 = new int[256];
+        int[] var10 = new int[256];
+
+        for (int var11 = 0; var11 < 256; var11++) {
+            if (var7[var11] != UNKNOWN && var8[var11] != Integer.MIN_VALUE) {
+                int var12 = var8[var11] - 1;
+                var10[var11] = var12;
+                if (var12 <= var5) {
+                    var9[var11] = shadeAbgr(var7[var11], sliceDepthDim(var12, var5, var6));
+                } else {
+                    var9[var11] = shadeAbgr(var7[var11], 0.10F);
+                }
+            } else {
+                var9[var11] = UNKNOWN;
+                var10[var11] = Integer.MIN_VALUE;
+            }
+        }
+
+        return new MapTileCache.Entry(var9, var10, true, false);
     }
 
     /**
@@ -751,8 +730,6 @@ public final class MapTileCache {
         public final int[] heights;
         public boolean shaded;
         public final boolean stored;
-        /** sky<<4|block nibbles captured at explore time; null for live chunks and old stored chunks. */
-        public byte[] light;
 
         Entry(int[] var1, int[] var2) {
             this.colors = var1;

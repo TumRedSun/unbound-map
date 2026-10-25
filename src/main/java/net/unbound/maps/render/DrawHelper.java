@@ -32,6 +32,20 @@ public final class DrawHelper {
         BufferUploader.drawWithShader(var10.buildOrThrow());
     }
 
+    /** Textured quad with a per-vertex ABGR tint (used for the Xaero-like night dim). */
+    public static void texturedQuadTinted(
+        Matrix4f var0, ResourceLocation var1, float var2, float var3, float var4, float var5, float var6, float var7, float var8, float var9, int var10
+    ) {
+        RenderSystem.setShaderTexture(0, var1);
+        RenderSystem.setShader(GameRenderer::getPositionTexColorShader);
+        BufferBuilder var11 = Tesselator.getInstance().begin(Mode.QUADS, DefaultVertexFormat.POSITION_TEX_COLOR);
+        var11.addVertex(var0, var2, var3, 0.0F).setUv(var6, var7).setColor(var10);
+        var11.addVertex(var0, var2, var5, 0.0F).setUv(var6, var9).setColor(var10);
+        var11.addVertex(var0, var4, var5, 0.0F).setUv(var8, var9).setColor(var10);
+        var11.addVertex(var0, var4, var3, 0.0F).setUv(var8, var7).setColor(var10);
+        BufferUploader.drawWithShader(var11.buildOrThrow());
+    }
+
     public static void coloredQuad(Matrix4f var0, float var1, float var2, float var3, float var4, int var5) {
         RenderSystem.setShader(GameRenderer::getPositionColorShader);
         BufferBuilder var6 = Tesselator.getInstance().begin(Mode.QUADS, DefaultVertexFormat.POSITION_COLOR);
@@ -45,8 +59,16 @@ public final class DrawHelper {
     /**
      * Draws a convex four-point polygon (given clockwise in GUI coordinates,
      * where Y grows downward - the same orientation GuiGraphics.fill uses).
+     * Non-finite coordinates are skipped: a single NaN vertex (e.g. from a
+     * corrupted entity rotation) used to rasterize as random "ghost" rectangles
+     * on some drivers - this was the recurring UI artifact.
      */
     public static void poly4(Matrix4f var0, float[] var1, int var2) {
+        for (float v : var1) {
+            if (!Float.isFinite(v)) {
+                return;
+            }
+        }
         RenderSystem.setShader(GameRenderer::getPositionColorShader);
         RenderSystem.disableCull();
         BufferBuilder var3 = Tesselator.getInstance().begin(Mode.QUADS, DefaultVertexFormat.POSITION_COLOR);
@@ -95,6 +117,9 @@ public final class DrawHelper {
      * @param yaw player rotation; 0 = south (+Z), 90 = west (-X)
      */
     public static void playerArrow(Matrix4f var0, float var1, float var2, float var3) {
+        if (!Float.isFinite(var3)) {
+            return;
+        }
         double var4 = Math.toRadians(var3);
         float var6 = (float)(-Math.sin(var4));
         float var7 = (float)Math.cos(var4);
@@ -121,6 +146,9 @@ public final class DrawHelper {
 
     /** Rectangle outline drawn as four thin quads, crisp at any zoom. */
     public static void outline(Matrix4f var0, float var1, float var2, float var3, float var4, float var5, int var6) {
+        if (!Float.isFinite(var1) || !Float.isFinite(var2) || !Float.isFinite(var3) || !Float.isFinite(var4)) {
+            return;
+        }
         RenderSystem.setShader(GameRenderer::getPositionColorShader);
         BufferBuilder var7 = Tesselator.getInstance().begin(Mode.QUADS, DefaultVertexFormat.POSITION_COLOR);
         quad(var7, var0, var1, var2, var3, var2 + var5, var6);
