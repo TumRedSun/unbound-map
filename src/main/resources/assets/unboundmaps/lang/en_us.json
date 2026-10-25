@@ -35,8 +35,8 @@
   "gui.unboundmaps.menuTeleport": "Teleport here",
   "gui.unboundmaps.teleportSent": "[Unbound Maps] Sent: /%s",
   "gui.unboundmaps.search": "Search",
-  "gui.unboundmaps.searchHint": "way/<name>  or  block/<name or mod:block>",
+  "gui.unboundmaps.searchHint": "way/<name>   block/<name or mod:block or #tag>   biome/<biome or #tag>",
   "gui.unboundmaps.searchNoResults": "Nothing found",
   "gui.unboundmaps.searchFound": "Found: %s",
-  "gui.unboundmaps.searchEnter": "Press Enter to search blocks (loaded chunks)"
+  "gui.unboundmaps.searchEnter": "Press Enter: searches loaded chunks and the whole explored map"
 }

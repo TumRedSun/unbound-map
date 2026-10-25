@@ -34,7 +34,9 @@ import net.unbound.maps.util.StoragePaths;
  * Persistent store for explored map data, kept per server/world and per dimension.
  * <p>
  * Chunks are packed into 32x32-chunk region files ({@code r.<rx>.<rz>.bin}, gzip-compressed
- * binary: 256 final tile colors + 256 surface heights per chunk). Discovered biomes and
+ * binary: 256 tile colors + 256 surface heights per chunk, format v2 also stores per-column
+ * sky/block light and the surface biome palette so day/night lighting and the biome search
+ * work on the WHOLE explored map, not only on loaded chunks). Discovered biomes and
  * blocks go into a human-readable {@code discovery.json}. Everything is written lazily:
  * dirty regions are flushed by {@link #saveDirty()} on an autosave timer, on dimension
  * change and on logout.
@@ -97,9 +99,22 @@ public final class MapStore {
         return ((long)(var0 >> REGION_BITS) & 0xFFFFFFFFL) << 32 | (long)(var1 >> REGION_BITS) & 0xFFFFFFFFL;
     }
 
-    /** Records a freshly computed live chunk (final colors incl. shading) plus all biomes/blocks seen in it. */
+    /**
+     * Records a freshly computed live chunk: colors (hillshaded, WITHOUT light -
+     * light is stored separately as sky/block nibbles and applied dynamically at
+     * render time, so night falls on the whole explored map), heights, the surface
+     * biome palette (for the biome search on stored chunks) and all biomes/blocks seen.
+     */
     public static void chunkExplored(
-        ResourceKey<Level> var0, long var1, int[] var2, int[] var3, java.util.Set<String> var4, java.util.Set<String> var5
+        ResourceKey<Level> var0,
+        long var1,
+        int[] var2,
+        int[] var3,
+        byte[] var4,
+        String[] var5,
+        byte[] var6,
+        java.util.Set<String> var7,
+        java.util.Set<String> var8
     ) {
         if (!enabled || var0 == null) {
             return;
@@ -110,41 +125,101 @@ public final class MapStore {
         if (dimensionDir == null) {
             return;
         }
-        int var6 = ChunkPos.getX(var1);
-        int var7 = ChunkPos.getZ(var1);
-        long var8 = regionKey(var6, var7);
-        Region var10 = region(var8);
-        var10.chunks.put(var1, new ChunkData(var2.clone(), var3.clone()));
-        var10.dirty = true;
-        DIRTY_REGIONS.add(var8);
-        if (!var4.isEmpty()) {
-            BIOMES.addAll(var4);
+        int var9 = ChunkPos.getX(var1);
+        int var10 = ChunkPos.getZ(var1);
+        long var11 = regionKey(var9, var10);
+        Region var13 = region(var11);
+        var13.chunks.put(var1, new ChunkData(var2.clone(), var3.clone(), var4, var5, var6));
+        var13.dirty = true;
+        DIRTY_REGIONS.add(var11);
+        if (!var7.isEmpty()) {
+            BIOMES.addAll(var7);
             discoveryDirty = true;
         }
-        if (!var5.isEmpty()) {
-            BLOCKS.addAll(var5);
+        if (!var8.isEmpty()) {
+            BLOCKS.addAll(var8);
             discoveryDirty = true;
         }
+    }
+
+    /** Everything stored about one chunk. {@code light} is sky<<?4|block nibbles (0xFF = unknown). */
+    public record StoredChunk(int[] colors, int[] heights, byte[] light, String[] biomePalette, byte[] columnBiomes) {
+    }
+
+    /** Returns all stored data of an unloaded chunk, or null when never explored. */
+    public static StoredChunk storedChunk(ResourceKey<Level> var0, long var1) {
+        if (!enabled || var0 == null || !sameDimension(var0) || dimensionDir == null) {
+            return null;
+        }
+        Region var2 = region(regionKey(ChunkPos.getX(var1), ChunkPos.getZ(var1)));
+        ChunkData var3 = var2.chunks.get(var1);
+        return var3 == null ? null : new StoredChunk(var3.colors, var3.heights, var3.light, var3.biomePalette, var3.columnBiomes);
     }
 
     /** Returns the stored colors of an unloaded chunk, or null when never explored. */
     public static int[] storedColors(ResourceKey<Level> var0, long var1) {
-        if (!enabled || var0 == null || !sameDimension(var0) || dimensionDir == null) {
-            return null;
-        }
-        Region var2 = region(regionKey(ChunkPos.getX(var1), ChunkPos.getZ(var1)));
-        ChunkData var3 = var2.chunks.get(var1);
-        return var3 == null ? null : var3.colors;
+        StoredChunk var2 = storedChunk(var0, var1);
+        return var2 == null ? null : var2.colors;
     }
 
     /** Returns the stored heights of an unloaded chunk, or null when never explored. */
     public static int[] storedHeights(ResourceKey<Level> var0, long var1) {
-        if (!enabled || var0 == null || !sameDimension(var0) || dimensionDir == null) {
-            return null;
+        StoredChunk var2 = storedChunk(var0, var1);
+        return var2 == null ? null : var2.heights;
+    }
+
+    /** Visitor over every stored chunk that has biome data (used by the biome search). */
+    public interface ChunkBiomeVisitor {
+        void accept(long chunkPos, String[] biomePalette, byte[] columnBiomes);
+    }
+
+    /**
+     * Walks every stored chunk of the current dimension (regions cached in memory
+     * first, then every region file on disk) that carries biome column data.
+     * Loading a big explored map can touch many files, so callers should run it
+     * only on an explicit user action (Enter in the search bar).
+     */
+    public static void forEachStoredChunk(ChunkBiomeVisitor var0) {
+        if (!enabled || dimensionDir == null) {
+            return;
         }
-        Region var2 = region(regionKey(ChunkPos.getX(var1), ChunkPos.getZ(var1)));
-        ChunkData var3 = var2.chunks.get(var1);
-        return var3 == null ? null : var3.heights;
+        for (Map.Entry<Long, Region> var2 : REGIONS.entrySet()) {
+            visitRegion(var2.getValue(), var0);
+        }
+        if (!Files.isDirectory(dimensionDir)) {
+            return;
+        }
+        try (var var3 = Files.list(dimensionDir)) {
+            for (Path var5 : var3.toList()) {
+                String var6 = var5.getFileName().toString();
+                if (!var6.startsWith("r.") || !var6.endsWith(".bin")) {
+                    continue;
+                }
+                String[] var7 = var6.substring(2, var6.length() - 4).split("\\.");
+                if (var7.length != 2) {
+                    continue;
+                }
+                try {
+                    long var8 = ((long)Integer.parseInt(var7[0]) & 0xFFFFFFFFL) << 32 | (long)Integer.parseInt(var7[1]) & 0xFFFFFFFFL;
+                    if (REGIONS.containsKey(var8)) {
+                        continue;
+                    }
+                    visitRegion(region(var8), var0);
+                } catch (NumberFormatException var10) {
+                }
+            }
+        } catch (Exception var11) {
+            UnboundMapsMod.LOGGER.warn("Unbound Maps: biome scan over stored regions failed: {}", var11.toString());
+        }
+    }
+
+    private static void visitRegion(Region var0, ChunkBiomeVisitor var1) {
+        for (Map.Entry<Long, ChunkData> var3 : var0.chunks.entrySet()) {
+            ChunkData var4 = var3.getValue();
+            if (var4.biomePalette != null && var4.columnBiomes != null) {
+                var1.accept(var3.getKey(), var4.biomePalette, var4.columnBiomes);
+            }
+        }
     }
 
     private static Region region(long var0) {
@@ -187,10 +262,11 @@ public final class MapStore {
         try {
             DataInputStreamLite var3 = new DataInputStreamLite(new BufferedInputStream(new GZIPInputStream(Files.newInputStream(var2)), 65536));
             int var4 = var3.readInt();
-            if (var4 != 1) {
+            if (var4 != 1 && var4 != 2) {
                 var3.close();
                 return var1;
             }
+            boolean var5b = var4 >= 2;
             int var5 = var3.readInt();
             for (int var6 = 0; var6 < var5; var6++) {
                 long var7 = var3.readLong();
@@ -202,7 +278,27 @@ public final class MapStore {
                 for (int var12 = 0; var12 < 256; var12++) {
                     var11[var12] = var3.readShort();
                 }
-                var1.chunks.put(var7, new ChunkData(var9, var11));
+                byte[] var13 = null;
+                String[] var14 = null;
+                byte[] var15 = null;
+                if (var5b) {
+                    var13 = new byte[256];
+                    for (int var16 = 0; var16 < 256; var16++) {
+                        var13[var16] = (byte)var3.readByte();
+                    }
+                    if (var3.readByte() != 0) {
+                        int var17 = var3.readByte() & 0xFF;
+                        var14 = new String[var17];
+                        for (int var18 = 0; var18 < var17; var18++) {
+                            var14[var18] = var3.readUtf();
+                        }
+                        var15 = new byte[256];
+                        for (int var19 = 0; var19 < 256; var19++) {
+                            var15[var19] = (byte)var3.readByte();
+                        }
+                    }
+                }
+                var1.chunks.put(var7, new ChunkData(var9, var11, var13, var14, var15));
             }
             var3.close();
         } catch (Exception var13) {
@@ -222,17 +318,37 @@ public final class MapStore {
             DataOutputStreamLite var4 = new DataOutputStreamLite(
                 new BufferedOutputStream(new GZIPOutputStream(Files.newOutputStream(var3)), 65536)
             );
-            var4.writeInt(1);
+            var4.writeInt(2);
             var4.writeInt(var1.chunks.size());
             for (Map.Entry<Long, ChunkData> var6 : var1.chunks.entrySet()) {
+                ChunkData var7 = (ChunkData)var6.getValue();
                 var4.writeLong((Long)var6.getKey());
-                int[] var7 = ((ChunkData)var6.getValue()).colors;
-                for (int var10 = 0; var10 < 256; var10++) {
-                    var4.writeInt(var7[var10]);
+                for (int var8 = 0; var8 < 256; var8++) {
+                    var4.writeInt(var7.colors[var8]);
                 }
-                int[] var8 = ((ChunkData)var6.getValue()).heights;
-                for (int var11 = 0; var11 < 256; var11++) {
-                    var4.writeShort(var8[var11]);
+                for (int var9 = 0; var9 < 256; var9++) {
+                    var4.writeShort(var7.heights[var9]);
+                }
+                if (var7.light != null) {
+                    for (int var10 = 0; var10 < 256; var10++) {
+                        var4.writeByte(var7.light[var10] & 0xFF);
+                    }
+                } else {
+                    for (int var11 = 0; var11 < 256; var11++) {
+                        var4.writeByte(255);
+                    }
+                }
+                if (var7.biomePalette != null && var7.columnBiomes != null && var7.biomePalette.length > 0) {
+                    var4.writeByte(1);
+                    var4.writeByte(Math.min(255, var7.biomePalette.length));
+                    for (int var12 = 0; var12 < Math.min(255, var7.biomePalette.length); var12++) {
+                        var4.writeUtf(var7.biomePalette[var12]);
+                    }
+                    for (int var13 = 0; var13 < 256; var13++) {
+                        var4.writeByte(var7.columnBiomes[var13] & 0xFF);
+                    }
+                } else {
+                    var4.writeByte(0);
                 }
             }
             var4.flush();
@@ -331,7 +447,7 @@ public final class MapStore {
         boolean dirty;
     }
 
-    private record ChunkData(int[] colors, int[] heights) {
+    private record ChunkData(int[] colors, int[] heights, byte[] light, String[] biomePalette, byte[] columnBiomes) {
     }
 
     /** Minimal little-endian stream adapter (avoids pulling the full java.io data classes into the hot path). */
@@ -348,6 +464,19 @@ public final class MapStore {
                 var0 |= (this.in.read() & 0xFF) << var1 * 8;
             }
             return var0;
+        }
+
+        int readByte() throws java.io.IOException {
+            return this.in.read() & 0xFF;
+        }
+
+        String readUtf() throws java.io.IOException {
+            int var0 = this.readByte() << 8 | this.readByte();
+            byte[] var1 = new byte[var0];
+            for (int var2 = 0; var2 < var0; var2++) {
+                var1[var2] = (byte)this.in.read();
+            }
+            return new String(var1, StandardCharsets.UTF_8);
         }
 
         short readShort() throws java.io.IOException {
@@ -379,6 +508,17 @@ public final class MapStore {
             for (int var1 = 3; var1 >= 0; var1--) {
                 this.out.write(var0 >>> var1 * 8 & 0xFF);
             }
+        }
+
+        void writeByte(int var0) throws java.io.IOException {
+            this.out.write(var0 & 0xFF);
+        }
+
+        void writeUtf(String var0) throws java.io.IOException {
+            byte[] var1 = var0.getBytes(StandardCharsets.UTF_8);
+            this.writeByte(var1.length >> 8 & 0xFF);
+            this.writeByte(var1.length & 0xFF);
+            this.out.write(var1);
         }
 
         void writeShort(int var0) throws java.io.IOException {

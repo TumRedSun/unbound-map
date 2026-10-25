@@ -14,6 +14,7 @@ import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.client.renderer.GameRenderer;
 import net.minecraft.client.resources.language.I18n;
+import net.minecraft.network.chat.Component;
 import net.minecraft.util.Mth;
 import net.unbound.maps.UnboundConfig;
 import net.unbound.maps.UnboundMapsDebug;
@@ -49,6 +50,7 @@ public final class MinimapHud {
         if (var3 != null && var4 != null && var2.screen == null && UnboundConfig.MINIMAP_ENABLED.get()) {
             try {
                 var0.flush();
+                LabelPlacer.begin();
                 int var5 = Math.max(32, UnboundConfig.MINIMAP_SIZE.get()) / 2;
                 int var6 = var0.guiWidth() - var5 - 8;
                 int var7 = var5 + 8;
@@ -102,9 +104,8 @@ public final class MinimapHud {
                     if (var19) {
                         String var27 = var4.getBiome(var3.blockPosition())
                             .unwrapKey()
-                            .map(var0x -> var0x.location().getPath())
-                            .orElse("unknown")
-                            .replace('_', ' ');
+                            .map(var0x -> Component.translatable(var0x.location().toLanguageKey("biome")).getString())
+                            .orElse("unknown");
                         var0.drawCenteredString(var2.font, var27, var6, var26, -4668212);
                     }
                 }

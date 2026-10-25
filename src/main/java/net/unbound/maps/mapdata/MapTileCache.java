@@ -52,8 +52,20 @@ public final class MapTileCache {
         0.10F, 0.13F, 0.16F, 0.19F, 0.22F, 0.25F, 0.29F, 0.33F,
         0.38F, 0.43F, 0.49F, 0.56F, 0.64F, 0.73F, 0.85F, 1.00F
     };
+    /** How much of the sky light is removed at full night. 0.50 keeps the map readable, like Xaero. */
+    private static final float NIGHT_DIM_STRENGTH = 0.50F;
     private static int lastDarken = -1;
     private static boolean nightDim = true;
+    /** Global look: gentle gamma lift (brighter mids) + mild saturation boost, applied to every rendered pixel. */
+    private static final int[] ENHANCE_LUT = new int[256];
+    private static final float ENHANCE_GAMMA = 0.87F;
+    private static final float ENHANCE_SATURATION = 1.14F;
+
+    static {
+        for (int i = 0; i < 256; i++) {
+            ENHANCE_LUT[i] = Math.round(255.0F * (float)Math.pow(i / 255.0, ENHANCE_GAMMA));
+        }
+    }
 
     private MapTileCache() {
     }
@@ -110,25 +122,109 @@ public final class MapTileCache {
         float var4 = LIGHT_CURVE[var2 & 15];
         float var5 = LIGHT_CURVE[var1 & 15];
         if (var3 && nightDim) {
-            var5 *= 1.0F - 0.72F * (float)var0.getSkyDarken() / 15.0F;
+            var5 *= 1.0F - NIGHT_DIM_STRENGTH * (float)var0.getSkyDarken() / 15.0F;
         }
 
         return Math.max(0.10F, Math.max(var4, var5));
     }
 
-    /** Applies per-pixel light to a finished entry. {@code dynamic=false} bakes the daylight look (used for the persistent store). */
-    private static void applyLight(ClientLevel var0, int var1, int var2, MapTileCache.Entry var3, boolean var4) {
+    /** Current sky darkness (0 = day, 15 = full night). */
+    private static int currentDarken() {
+        Minecraft mc = Minecraft.getInstance();
+        return mc.level != null ? mc.level.getSkyDarken() : 0;
+    }
+
+    /**
+     * Samples sky/block light per pixel WITHOUT touching the colors and returns
+     * one byte per pixel: sky<<4 | block. Stored in the persistent map, so the
+     * day/night cycle replays over every explored chunk, loaded or not.
+     */
+    private static byte[] captureLight(ClientLevel var0, int var1, int var2, MapTileCache.Entry var3) {
+        byte[] var4 = new byte[256];
         int var5 = var0.getMinBuildHeight();
         MutableBlockPos var6 = new MutableBlockPos();
 
         for (int var7 = 0; var7 < 256; var7++) {
             if (var3.colors[var7] != UNKNOWN) {
                 var6.set((var1 << 4) + (var7 & 15), Math.max(var3.heights[var7] - 1, var5), (var2 << 4) + (var7 >> 4));
-                int var8 = var0.getBrightness(LightLayer.SKY, var6);
-                int var9 = var0.getBrightness(LightLayer.BLOCK, var6);
-                var3.colors[var7] = shadeAbgr(var3.colors[var7], lightShade(var0, var8, var9, var4));
+                var4[var7] = (byte)(var0.getBrightness(LightLayer.SKY, var6) << 4 | var0.getBrightness(LightLayer.BLOCK, var6));
+            } else {
+                var4[var7] = -1;
             }
         }
+
+        return var4;
+    }
+
+    /**
+     * Applies the day/night look to a STORED entry using the light captured when
+     * the chunk was explored. Old (v1) chunks have the daylight look baked in and
+     * no light data, so they get a uniform dim instead - still far better than
+     * staying full-bright at night.
+     */
+    private static void applyStoredLight(MapTileCache.Entry var0, int var1) {
+        float var2 = nightDim ? 1.0F - NIGHT_DIM_STRENGTH * (float)var1 / 15.0F : 1.0F;
+
+        for (int var3 = 0; var3 < 256; var3++) {
+            if (var0.colors[var3] != UNKNOWN) {
+                if (var0.light != null) {
+                    int var4 = var0.light[var3] & 0xFF;
+                    if (var4 != 0xFF) {
+                        float var5 = Math.max(LIGHT_CURVE[var4 & 15], LIGHT_CURVE[var4 >> 4] * var2);
+                        var0.colors[var3] = shadeAbgr(var0.colors[var3], Math.max(0.10F, var5));
+                    }
+                } else {
+                    var0.colors[var3] = shadeAbgr(var0.colors[var3], Math.max(0.45F, var2));
+                }
+            }
+        }
+    }
+
+    /**
+     * Multiplies a freshly computed entry by the dynamic light from captured
+     * nibbles (same sampling positions as the old per-pixel applyLight).
+     */
+    private static void applyLightNibbles(MapTileCache.Entry var0, byte[] var1, boolean var2) {
+        float var3 = var2 && nightDim ? 1.0F - NIGHT_DIM_STRENGTH * (float)currentDarken() / 15.0F : 1.0F;
+
+        for (int var4 = 0; var4 < 256; var4++) {
+            int var5 = var1[var4] & 0xFF;
+            if (var0.colors[var4] != UNKNOWN && var5 != 0xFF) {
+                float var6 = Math.max(LIGHT_CURVE[var5 & 15], LIGHT_CURVE[var5 >> 4] * var3);
+                var0.colors[var4] = shadeAbgr(var0.colors[var4], Math.max(0.10F, var6));
+            }
+        }
+    }
+
+    /**
+     * The final look of EVERY map pixel (surface, cave slice, live or stored):
+     * a gentle gamma lift makes mid-tones brighter and softer, a mild saturation
+     * boost keeps the colors juicy. Lava and other self-lit blocks stay vivid.
+     */
+    public static int enhance(int var0) {
+        if (var0 == UNKNOWN || (var0 >>> 24) != 0xFF) {
+            return var0;
+        }
+        int var1 = ENHANCE_LUT[var0 & 0xFF];
+        int var2 = ENHANCE_LUT[var0 >>> 8 & 0xFF];
+        int var3 = ENHANCE_LUT[var0 >>> 16 & 0xFF];
+        float var4 = 0.299F * var1 + 0.587F * var2 + 0.114F * var3;
+        int var5 = clamp255(Math.round(var4 + (var1 - var4) * ENHANCE_SATURATION));
+        int var6 = clamp255(Math.round(var4 + (var2 - var4) * ENHANCE_SATURATION));
+        int var7 = clamp255(Math.round(var4 + (var3 - var4) * ENHANCE_SATURATION));
+        return var0 & 0xFF000000 | var7 << 16 | var6 << 8 | var5;
+    }
+
+    private static int clamp255(int var0) {
+        return var0 < 0 ? 0 : Math.min(255, var0);
+    }
+
+    /** Lava glows: blend the map color toward a vivid bright orange, no depth darkening. */
+    private static int lavaColor(int var0) {
+        int var1 = Math.round((var0 & 0xFF) * 0.55F + 255.0F * 0.45F);
+        int var2 = Math.round((var0 >>> 8 & 0xFF) * 0.55F + 176.0F * 0.45F);
+        int var3 = Math.round((var0 >>> 16 & 0xFF) * 0.55F + 64.0F * 0.45F);
+        return var0 & 0xFF000000 | clamp255(var3) << 16 | clamp255(var2) << 8 | clamp255(var1);
     }
 
     public static int bucketOf(int var0) {
@@ -242,7 +338,7 @@ public final class MapTileCache {
             WorldMapCells.markChunkDirty(var5);
         }
 
-        return var7.colors[(var2 & 15) << 4 | var1 & 15];
+        return enhance(var7.colors[(var2 & 15) << 4 | var1 & 15]);
     }
 
     public static int surfaceHeight(ClientLevel var0, int var1, int var2) {
@@ -261,10 +357,15 @@ public final class MapTileCache {
         ChunkAccess var6 = var0.getChunk(var1, var2, ChunkStatus.FULL, false);
         if (var6 == null) {
             if (MapStore.isEnabled()) {
-                int[] var7 = MapStore.storedColors(var0.dimension(), var4);
+                MapStore.StoredChunk var7 = MapStore.storedChunk(var0.dimension(), var4);
                 if (var7 != null) {
-                    int[] var8 = MapStore.storedHeights(var0.dimension(), var4);
-                    return new MapTileCache.Entry(var7, var8 == null ? defaultHeights() : var8, true, true);
+                    MapTileCache.Entry var8 = new MapTileCache.Entry(
+                        var7.colors(), var7.heights() == null ? defaultHeights() : var7.heights(), true, true
+                    );
+                    var8.light = var7.light();
+                    // day/night replays over the WHOLE explored map, not only near the player
+                    applyStoredLight(var8, currentDarken());
+                    return var8;
                 }
             }
 
@@ -309,13 +410,19 @@ public final class MapTileCache {
 
                             FluidState var22 = var6.getFluidState(var12);
                             if (!var22.isEmpty()) {
-                                int var23 = 0;
+                                if (var22.is(net.minecraft.tags.FluidTags.LAVA)) {
+                                    // lava emits full light: keep it glowing hot instead of the
+                                    // water-style depth darkening that made it look dark red
+                                    var19 = lavaColor(var19);
+                                } else {
+                                    int var23 = 0;
 
-                                for (BlockPos var24 = var12.immutable(); var23 < 12 && !var6.getFluidState(var24).isEmpty(); var23++) {
-                                    var24 = var24.below();
+                                    for (BlockPos var24 = var12.immutable(); var23 < 12 && !var6.getFluidState(var24).isEmpty(); var23++) {
+                                        var24 = var24.below();
+                                    }
+
+                                    var19 = shadeAbgr(var19, Math.max(0.45F, 1.0F - var23 * 0.07F));
                                 }
-
-                                var19 = shadeAbgr(var19, Math.max(0.45F, 1.0F - var23 * 0.07F));
                             }
 
                             var32[var15] = var19;
@@ -330,49 +437,75 @@ public final class MapTileCache {
             }
 
             boolean var35 = flag(UnboundConfig.LIGHT_SHADING, true);
+            byte[] var36 = null;
             if (var35) {
-                if (var3 && var31) {
-                    // persist the daylight look, so night exploration never bakes
-                    // darkness into the saved map
-                    MapTileCache.Entry var36 = new MapTileCache.Entry(var34.colors.clone(), var34.heights, true, false);
-                    applyLight(var0, var1, var2, var36, false);
-                    recordToStore(var0, var1, var2, var4, var36);
-                }
+                // sample sky/block light once: stored with the chunk (day/night on the
+                // whole explored map) and applied to the live colors right after
+                var36 = captureLight(var0, var1, var2, var34);
+            }
 
-                applyLight(var0, var1, var2, var34, true);
-            } else if (var3 && var31) {
-                recordToStore(var0, var1, var2, var4, var34);
+            if (var3 && var31) {
+                recordToStore(var0, var1, var2, var4, var34, var36);
+            }
+
+            if (var36 != null) {
+                applyLightNibbles(var34, var36, true);
             }
 
             return var34;
         }
     }
 
-    private static void recordToStore(ClientLevel var0, int var1, int var2, long var3, MapTileCache.Entry var5) {
-        java.util.Set<String> var6 = new java.util.HashSet<>();
+    /** Persists a chunk: hillshaded colors WITHOUT light, light nibbles, surface biome palette, discovery sets. */
+    private static void recordToStore(
+        ClientLevel var0, int var1, int var2, long var3, MapTileCache.Entry var5, byte[] var6
+    ) {
         java.util.Set<String> var7 = new java.util.HashSet<>();
-        MutableBlockPos var8 = new MutableBlockPos();
+        java.util.Set<String> var8 = new java.util.HashSet<>();
+        MutableBlockPos var9 = new MutableBlockPos();
+        java.util.List<String> var10 = new java.util.ArrayList<>();
+        java.util.Map<String, Byte> var11 = new java.util.HashMap<>();
+        byte[] var12 = new byte[256];
 
         try {
-            for (int var9 = 0; var9 < 16; var9++) {
-                for (int var10 = 0; var10 < 16; var10++) {
-                    int var11 = var9 << 4 | var10;
-                    if (var5.colors[var11] != -15723752) {
-                        var8.set((var1 << 4) + var10, Math.max(var5.heights[var11] - 1, var0.getMinBuildHeight()), (var2 << 4) + var9);
-                        BlockState var12 = var0.getBlockState(var8);
-                        var0.getBiome(var8)
-                            .unwrapKey()
-                            .ifPresent(var0x -> var6.add(var0x.location().toString()));
-                        var7.add(BuiltInRegistries.BLOCK.getKey(var12.getBlock()).toString());
+            for (int var13 = 0; var13 < 256; var13++) {
+                if (var5.colors[var13] != -15723752) {
+                    var9.set((var1 << 4) + (var13 & 15), Math.max(var5.heights[var13] - 1, var0.getMinBuildHeight()), (var2 << 4) + (var13 >> 4));
+                    BlockState var14 = var0.getBlockState(var9);
+                    var8.add(BuiltInRegistries.BLOCK.getKey(var14.getBlock()).toString());
+                    String var15 = var0.getBiome(var9)
+                        .unwrapKey()
+                        .map(var0x -> var0x.location().toString())
+                        .orElse(null);
+                    if (var15 != null) {
+                        var7.add(var15);
+                        Byte var16 = var11.get(var15);
+                        if (var16 == null) {
+                            if (var10.size() < 255) {
+                                var16 = (byte)var10.size();
+                                var10.add(var15);
+                                var11.put(var15, var16);
+                            } else {
+                                var16 = (byte)254;
+                            }
+                        }
+
+                        var12[var13] = var16;
+                    } else {
+                        var12[var13] = -1;
                     }
+                } else {
+                    var12[var13] = -1;
                 }
             }
-        } catch (Exception var13) {
-            var6.clear();
+        } catch (Exception var17) {
             var7.clear();
+            var8.clear();
         }
 
-        MapStore.chunkExplored(var0.dimension(), var3, var5.colors, var5.heights, var6, var7);
+        MapStore.chunkExplored(
+            var0.dimension(), var3, var5.colors, var5.heights, var6, var10.toArray(new String[0]), var12, var7, var8
+        );
     }
 
     private static int[] defaultHeights() {
@@ -460,7 +593,7 @@ public final class MapTileCache {
             storeWithLimit(var8, var6, var9, 8000);
         }
 
-        return var9.colors[(var2 & 15) << 4 | var1 & 15];
+        return enhance(var9.colors[(var5 & 15) << 4 | var1 & 15]);
     }
 
     public static int sliceTopY(ClientLevel var0, int var1, int var2, int var3) {
@@ -501,13 +634,17 @@ public final class MapTileCache {
                         BlockState var18 = var4.getBlockState(var13);
                         int var19 = mapColorAbgr(var18.getMapColor(var4, var13));
                         if (!var18.getFluidState().isEmpty()) {
-                            int var20 = 0;
+                            if (var18.getFluidState().is(net.minecraft.tags.FluidTags.LAVA)) {
+                                var19 = lavaColor(var19);
+                            } else {
+                                int var20 = 0;
 
-                            for (BlockPos var21 = var13.immutable(); var20 < 12 && !var4.getFluidState(var21).isEmpty(); var20++) {
-                                var21 = var21.below();
+                                for (BlockPos var21 = var13.immutable(); var20 < 12 && !var4.getFluidState(var21).isEmpty(); var20++) {
+                                    var21 = var21.below();
+                                }
+
+                                var19 = shadeAbgr(var19, Math.max(0.4F, 1.0F - var20 * 0.08F));
                             }
-
-                            var19 = shadeAbgr(var19, Math.max(0.4F, 1.0F - var20 * 0.08F));
                         }
 
                         if (var29) {
@@ -614,6 +751,8 @@ public final class MapTileCache {
         public final int[] heights;
         public boolean shaded;
         public final boolean stored;
+        /** sky<<4|block nibbles captured at explore time; null for live chunks and old stored chunks. */
+        public byte[] light;
 
         Entry(int[] var1, int[] var2) {
             this.colors = var1;

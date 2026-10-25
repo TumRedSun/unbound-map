@@ -171,6 +171,8 @@ public final class EntityRadar {
         ResourceLocation var7 = null;
         ResourceLocation var8 = null;
         String var9 = null;
+        int texW = 64;
+        int texH = 64;
         if (var3 instanceof Player var10) {
             PlayerSkin var11;
             try {
@@ -181,6 +183,9 @@ public final class EntityRadar {
 
             if (var11 != null) {
                 var8 = var11.texture();
+                int[] dims = textureSize(var2, var8);
+                texW = dims[0];
+                texH = dims[1];
                 var7 = faceIcon(var2, var8, 8, 8, 8, 8);
             }
 
@@ -195,16 +200,20 @@ public final class EntityRadar {
                 }
 
                 if (var8 != null) {
+                    int[] dims = textureSize(var2, var8);
+                    texW = dims[0];
+                    texH = dims[1];
                     var7 = faceIcon(var2, var8, var13[0], var13[1], var13[2], var13[3]);
                     if (var7 == null) {
                         var8 = null;
                     }
                 }
             }
-        }
 
-        if (var7 == null && var8 == null && var9 == null) {
-            var9 = var3.getType().getDescription().getString();
+            // name fallback: living creatures only - boats/minecarts/etc stay silent dots
+            if (var7 == null && var8 == null && var9 == null && var3 instanceof net.minecraft.world.entity.LivingEntity) {
+                var9 = var3.getType().getDescription().getString();
+            }
         }
 
         if (var6) {
@@ -213,17 +222,24 @@ public final class EntityRadar {
 
         float var15 = var4 - (float)ICON / 2.0F;
         float var16 = var5 - (float)ICON / 2.0F;
-        DrawHelper.coloredQuad(var1, var15 - 1.0F, var16 - 1.0F, var15 + (float)ICON + 1.0F, var16 + (float)ICON + 1.0F, -872415232);
         if (var7 != null) {
+            DrawHelper.coloredQuad(var1, var15 - 1.0F, var16 - 1.0F, var15 + (float)ICON + 1.0F, var16 + (float)ICON + 1.0F, -872415232);
             blitIcon(var1, var7, var15, var16, (float)ICON, (float)ICON);
         } else if (var8 != null) {
-            blitFace(var1, var8, var15, var16, (float)ICON, (float)ICON, 8.0F, 8.0F, 8.0F, 8.0F, 64.0F, 64.0F);
+            DrawHelper.coloredQuad(var1, var15 - 1.0F, var16 - 1.0F, var15 + (float)ICON + 1.0F, var16 + (float)ICON + 1.0F, -872415232);
+            blitFace(var1, var8, var15, var16, (float)ICON, (float)ICON, 8.0F, 8.0F, 8.0F, 8.0F, (float)texW, (float)texH);
         } else {
+            // plain colored dot, no bulky dark box around it
             drawDot(var0, var1, var4, var5, dotColor(var3));
         }
 
         if (var9 != null) {
-            drawLabel(var0, var2.font, var4, var5 + (float)ICON / 2.0F + 1.0F, var9);
+            Font var17 = var2.font;
+            float var18 = (float)var17.width(var9) * 0.7F;
+            float var19 = var5 + (float)ICON / 2.0F + 2.0F;
+            if (LabelPlacer.tryPlaceCentered(var4, var19, var18, 8.0F)) {
+                drawLabel(var0, var17, var4, var19, var9);
+            }
         }
 
         if (var6) {
@@ -231,6 +247,38 @@ public final class EntityRadar {
         }
 
         return true;
+    }
+
+    /**
+     * Real texture dimensions: from the resource PNG when readable, otherwise
+     * from the registered DynamicTexture (downloaded Skin Restorer skins),
+     * falling back to the modern 64x64 skin layout.
+     */
+    private static int[] textureSize(Minecraft var0, ResourceLocation var1) {
+        try {
+            Optional<net.minecraft.server.packs.resources.Resource> var2 = var0.getResourceManager().getResource(var1);
+            if (var2.isPresent()) {
+                NativeImage var3;
+                try (InputStream var4 = var2.get().open()) {
+                    var3 = NativeImage.read(var4);
+                }
+
+                int[] var5 = new int[]{var3.getWidth(), var3.getHeight()};
+                var3.close();
+                return var5;
+            }
+        } catch (Throwable var6) {
+        }
+
+        try {
+            net.minecraft.client.renderer.texture.AbstractTexture var7 = var0.getTextureManager().getTexture(var1);
+            if (var7 instanceof DynamicTexture var8 && var8.getPixels() != null) {
+                return new int[]{var8.getPixels().getWidth(), var8.getPixels().getHeight()};
+            }
+        } catch (Throwable var9) {
+        }
+
+        return new int[]{64, 64};
     }
 
     private static void drawLabel(GuiGraphics var0, Font var1, float var2, float var3, String var4) {
@@ -243,9 +291,10 @@ public final class EntityRadar {
 
     /**
      * Crops the face rect from the entity/skin texture once and caches it as a
-     * tiny DynamicTexture. Reading the real PNG makes the crop stable: texture
-     * dimensions, sub-folders and modded reskins are all handled. A failed crop
-     * is remembered and the caller falls back to the mob name.
+     * tiny DynamicTexture. The PNG is read from the resource manager; when the
+     * texture only exists in the texture manager (downloaded skins), its
+     * DynamicTexture pixels are copied instead. A failed crop is remembered and
+     * the caller falls back to a direct UV blit or the mob name.
      */
     private static ResourceLocation faceIcon(Minecraft var0, ResourceLocation var1, int var2, int var3, int var4, int var5) {
         if (ICONS.containsKey(var1)) {
@@ -254,38 +303,52 @@ public final class EntityRadar {
 
         ResourceLocation var6 = null;
         try {
-            Optional<net.minecraft.server.packs.resources.Resource> var7 = var0.getResourceManager().getResource(var1);
-            if (var7.isPresent()) {
-                NativeImage var8;
-                try (InputStream var9 = var7.get().open()) {
-                    var8 = NativeImage.read(var9);
+            NativeImage var7 = null;
+            Optional<net.minecraft.server.packs.resources.Resource> var8 = var0.getResourceManager().getResource(var1);
+            if (var8.isPresent()) {
+                try (InputStream var9 = var8.get().open()) {
+                    var7 = NativeImage.read(var9);
                 }
+            } else {
+                net.minecraft.client.renderer.texture.AbstractTexture var10 = var0.getTextureManager().getTexture(var1);
+                if (var10 instanceof DynamicTexture var11 && var11.getPixels() != null) {
+                    NativeImage var12 = var11.getPixels();
+                    var7 = new NativeImage(NativeImage.Format.RGBA, var12.getWidth(), var12.getHeight(), false);
 
+                    for (int var13 = 0; var13 < var12.getHeight(); var13++) {
+                        for (int var14 = 0; var14 < var12.getWidth(); var14++) {
+                            var7.setPixelRGBA(var14, var13, var12.getPixelRGBA(var14, var13));
+                        }
+                    }
+                }
+            }
+
+            if (var7 != null) {
                 try {
-                    int var10 = var8.getWidth();
-                    int var11 = var8.getHeight();
-                    int var12 = Mth.clamp(var2, 0, var10 - 1);
-                    int var13 = Mth.clamp(var3, 0, var11 - 1);
-                    int var14 = Math.min(var4, var10 - var12);
-                    int var15 = Math.min(var5, var11 - var13);
-                    if (var14 > 0 && var15 > 0) {
-                        NativeImage var16 = new NativeImage(NativeImage.Format.RGBA, var14, var15, false);
+                    int var15 = var7.getWidth();
+                    int var16 = var7.getHeight();
+                    int var17 = Mth.clamp(var2, 0, var15 - 1);
+                    int var18 = Mth.clamp(var3, 0, var16 - 1);
+                    int var19 = Math.min(var4, var15 - var17);
+                    int var20 = Math.min(var5, var16 - var18);
+                    if (var19 > 0 && var20 > 0) {
+                        NativeImage var21 = new NativeImage(NativeImage.Format.RGBA, var19, var20, false);
 
-                        for (int var17 = 0; var17 < var15; var17++) {
-                            for (int var18 = 0; var18 < var14; var18++) {
-                                var16.setPixelRGBA(var18, var17, var8.getPixelRGBA(var12 + var18, var13 + var17));
+                        for (int var22 = 0; var22 < var20; var22++) {
+                            for (int var23 = 0; var23 < var19; var23++) {
+                                var21.setPixelRGBA(var23, var22, var7.getPixelRGBA(var17 + var23, var18 + var22));
                             }
                         }
 
-                        ResourceLocation var19 = UnboundMapsMod.id("radar_icon_" + iconSeq++);
-                        var0.getTextureManager().register(var19, new DynamicTexture(var16));
-                        var6 = var19;
+                        ResourceLocation var24 = UnboundMapsMod.id("radar_icon_" + iconSeq++);
+                        var0.getTextureManager().register(var24, new DynamicTexture(var21));
+                        var6 = var24;
                     }
                 } finally {
-                    var8.close();
+                    var7.close();
                 }
             }
-        } catch (Throwable var20) {
+        } catch (Throwable var25) {
             var6 = null;
         }
 

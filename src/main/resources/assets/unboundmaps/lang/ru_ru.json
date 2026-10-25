@@ -35,8 +35,8 @@
   "gui.unboundmaps.menuTeleport": "Телепорт сюда",
   "gui.unboundmaps.teleportSent": "[Unbound Maps] Отправлено: /%s",
   "gui.unboundmaps.search": "Поиск",
-  "gui.unboundmaps.searchHint": "way/<имя>  или  block/<блок или мод:блок>",
+  "gui.unboundmaps.searchHint": "way/<имя>   block/<блок или мод:блок или #тег>   biome/<биом или #тег>",
   "gui.unboundmaps.searchNoResults": "Ничего не найдено",
   "gui.unboundmaps.searchFound": "Найдено: %s",
-  "gui.unboundmaps.searchEnter": "Нажмите Enter для поиска блоков (по загруженным чанкам)"
+  "gui.unboundmaps.searchEnter": "Нажмите Enter: поиск по загруженным чанкам и всей изученной карте"
 }

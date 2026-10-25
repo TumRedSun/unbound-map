@@ -5,6 +5,7 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Locale;
+import java.util.Optional;
 import java.util.UUID;
 import net.minecraft.Util;
 import net.minecraft.client.Minecraft;
@@ -14,9 +15,16 @@ import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.client.resources.language.I18n;
 import net.minecraft.core.BlockPos;
+import net.minecraft.core.Holder;
 import net.minecraft.core.registries.BuiltInRegistries;
+import net.minecraft.core.registries.Registries;
 import net.minecraft.network.chat.Component;
+import net.minecraft.resources.ResourceKey;
+import net.minecraft.resources.ResourceLocation;
+import net.minecraft.tags.TagKey;
 import net.minecraft.util.Mth;
+import net.minecraft.world.level.ChunkPos;
+import net.minecraft.world.level.biome.Biome;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.chunk.ChunkAccess;
 import net.minecraft.world.level.chunk.LevelChunk;
@@ -25,9 +33,11 @@ import net.minecraft.world.level.chunk.status.ChunkStatus;
 import net.unbound.maps.UnboundConfig;
 import net.unbound.maps.UnboundMapsMod;
 import net.unbound.maps.mapdata.CaveState;
+import net.unbound.maps.mapdata.MapStore;
 import net.unbound.maps.mapdata.MapTileCache;
 import net.unbound.maps.mapdata.WorldMapCells;
 import net.unbound.maps.render.DrawHelper;
+import net.unbound.maps.render.LabelPlacer;
 import net.unbound.maps.render.EntityRadar;
 import net.unbound.maps.render.MinimapHud;
 import net.unbound.maps.render.WaypointRenderer;
@@ -61,6 +71,7 @@ public class WorldMapScreen extends Screen {
     private int searchIndex;
     private String searchStatus;
     private String lastBlockQuery;
+    private String lastBiomeQuery;
 
     public WorldMapScreen() {
         super(Component.translatable("gui.unboundmaps.worldmap"));
@@ -82,6 +93,7 @@ public class WorldMapScreen extends Screen {
 
     public void render(GuiGraphics var1, int var2, int var3, float var4) {
         Minecraft var5 = Minecraft.getInstance();
+        LabelPlacer.begin();
         int var6 = this.width;
         int var7 = this.height;
         var1.fill(0, 0, var6, var7, BG_OPAQUE);
@@ -149,11 +161,21 @@ public class WorldMapScreen extends Screen {
         }
 
         this.renderCursorBar(var1, var2, var3);
-        String var34 = I18n.get("gui.unboundmaps.hint")
-            + "  ["
-            + String.format(Locale.ROOT, "%.2f blocks/px", this.blocksPerPixel)
-            + "]";
-        var1.drawCenteredString(var5.font, var34, var6 / 2, var7 - 14, -4668212);
+        String hint = I18n.get("gui.unboundmaps.hint");
+        String zoomSuffix = "  [" + String.format(Locale.ROOT, "%.2f blocks/px", this.blocksPerPixel) + "]";
+        List<String> lines = wrapSegments(hint, " | ", var6 - 20);
+        int firstY = var7 - 12 - (lines.size() - 1) * 11 - 1;
+        for (int li = 0; li < lines.size(); li++) {
+            String line = li == lines.size() - 1 ? lines.get(li) + zoomSuffix : lines.get(li);
+            if (li == lines.size() - 1) {
+                while (var5.font.width(line) > var6 - 20 && zoomSuffix.length() > 0) {
+                    zoomSuffix = zoomSuffix.substring(1);
+                    line = lines.get(li) + zoomSuffix;
+                }
+            }
+            var1.drawCenteredString(var5.font, line, var6 / 2, firstY + li * 11, -4668212);
+        }
+
         this.renderHeightSlider(var1, var2, var3);
         super.render(var1, var2, var3, var4);
         if (this.menu != null) {
@@ -198,6 +220,29 @@ public class WorldMapScreen extends Screen {
             && var3 < this.sliderY + 14;
     }
 
+    /** Splits a hint string into centered lines no wider than maxWidth, keeping the separators. */
+    private static List<String> wrapSegments(String text, String sep, int maxWidth) {
+        net.minecraft.client.gui.Font font = Minecraft.getInstance().font;
+        String[] parts = text.split(java.util.regex.Pattern.quote(sep));
+        List<String> lines = new ArrayList<>();
+        StringBuilder current = new StringBuilder();
+        for (String part : parts) {
+            String candidate = current.length() == 0 ? part : current + sep + part;
+            if (current.length() > 0 && font.width(candidate) > maxWidth) {
+                lines.add(current.toString());
+                current = new StringBuilder(part);
+            } else {
+                current = new StringBuilder(candidate);
+            }
+        }
+
+        if (current.length() > 0) {
+            lines.add(current.toString());
+        }
+
+        return lines.isEmpty() ? List.of(text) : lines;
+    }
+
     private void renderCursorBar(GuiGraphics var1, int var2, int var3) {
         Minecraft var4 = Minecraft.getInstance();
         int var5 = var4.player != null ? var4.player.getBlockY() : 64;
@@ -213,14 +258,18 @@ public class WorldMapScreen extends Screen {
             var7 = Mth.floor(var10);
             var9 = Mth.floor(var12);
             var8 = MapTileCache.columnY(var4.level, var7, var9, var5, MapTileCache.isCave());
-            BlockPos var13 = new BlockPos(var7, Math.max(var8, var4.level.getMinBuildHeight()), var9);
-            BlockState var14 = var4.level.getBlockState(var13);
-            blockName = var14.getBlock().getName().getString();
-            biomeName = var4.level
-                .getBiome(var13)
-                .unwrapKey()
-                .map(var0x -> Component.translatable(var0x.location().toLanguageKey("biome")).getString())
-                .orElse(null);
+            // block/biome names only exist for LOADED chunks; stored chunks would
+            // report "void air" / wrong biome, so they are simply omitted
+            if (var4.level.getChunk(Math.floorDiv(var7, 16), Math.floorDiv(var9, 16), ChunkStatus.FULL, false) != null) {
+                BlockPos var13 = new BlockPos(var7, Math.max(var8, var4.level.getMinBuildHeight()), var9);
+                BlockState var14 = var4.level.getBlockState(var13);
+                blockName = var14.getBlock().getName().getString();
+                biomeName = var4.level
+                    .getBiome(var13)
+                    .unwrapKey()
+                    .map(var0x -> Component.translatable(var0x.location().toLanguageKey("biome")).getString())
+                    .orElse(null);
+            }
         }
 
         String var14b = "X: "
@@ -548,7 +597,7 @@ public class WorldMapScreen extends Screen {
         }
     }
 
-    /** Live update while typing: instant for waypoints, blocks wait for Enter (their scan is heavier). */
+    /** Live update while typing: instant for waypoints, blocks and biomes wait for Enter (their scan is heavier). */
     private void liveSearch() {
         if (!this.searchOpen) {
             return;
@@ -561,7 +610,7 @@ public class WorldMapScreen extends Screen {
         }
 
         String var2 = var1.toLowerCase(Locale.ROOT);
-        if (var2.startsWith("block/") || var2.startsWith("\u0431\u043b\u043e\u043a/")) {
+        if (var2.startsWith("block/") || var2.startsWith("\u0431\u043b\u043e\u043a/") || var2.startsWith("biome/") || var2.startsWith("\u0431\u0438\u043e\u043c/")) {
             this.searchStatus = I18n.get("gui.unboundmaps.searchEnter");
         } else {
             String var3;
@@ -591,6 +640,10 @@ public class WorldMapScreen extends Screen {
                     var4 = var2.substring(6).trim();
                 } else if (var3.startsWith("\u0431\u043b\u043e\u043a/")) {
                     var4 = var2.substring(5).trim();
+                } else if (var3.startsWith("biome/")) {
+                    var4 = var2.substring(6).trim();
+                } else if (var3.startsWith("\u0431\u0438\u043e\u043c/")) {
+                    var4 = var2.substring(5).trim();
                 } else if (var3.startsWith("way/")) {
                     var4 = var2.substring(4).trim();
                 } else if (var3.startsWith("wp/")) {
@@ -605,6 +658,8 @@ public class WorldMapScreen extends Screen {
 
                 if (var3.startsWith("block/") || var3.startsWith("\u0431\u043b\u043e\u043a/")) {
                     this.searchBlocks(var4, var1);
+                } else if (var3.startsWith("biome/") || var3.startsWith("\u0431\u0438\u043e\u043c/")) {
+                    this.searchBiomes(var4, var1);
                 } else {
                     this.searchWaypoints(var4, var1);
                 }
@@ -750,9 +805,233 @@ public class WorldMapScreen extends Screen {
         }
     }
 
-    /** Matches a block against the query: registry id (mod:block), translation key or localized name. */
+    /**
+     * Biome search over the WHOLE map: live chunks are scanned through their
+     * biome containers, every other explored chunk comes from the persistent
+     * store (per-column surface biome palette). The query matches the full or
+     * partial localized name (current language), the registry path (english
+     * words, spaces instead of underscores) or a tag with the # prefix.
+     */
+    private void searchBiomes(String var1, boolean var2) {
+        if (var1.isEmpty()) {
+            return;
+        }
+        if (var2 && var1.equals(this.lastBiomeQuery) && !this.searchResults.isEmpty()) {
+            this.searchIndex = (this.searchIndex + 1) % this.searchResults.size();
+            WorldMapScreen.SearchHit var3 = this.searchResults.get(this.searchIndex);
+            this.searchStatus = I18n.get("gui.unboundmaps.searchFound", this.searchResults.size())
+                + " \u2014 "
+                + var3.label()
+                + " ("
+                + (this.searchIndex + 1)
+                + "/"
+                + this.searchResults.size()
+                + ")";
+            this.centerOn(var3.x(), var3.z());
+            return;
+        }
+
+        ClientLevel var9 = this.minecraft.level;
+        if (var9 == null) {
+            return;
+        }
+        this.lastBiomeQuery = var1;
+        boolean tagQuery = var1.startsWith("#");
+        ResourceLocation tagRlTmp = null;
+        if (tagQuery) {
+            String t = var1.substring(1).trim().replace(' ', '_');
+            tagRlTmp = ResourceLocation.tryParse(t.contains(":") ? t : "minecraft:" + t);
+            if (tagRlTmp == null) {
+                this.searchResults = List.of();
+                this.searchIndex = 0;
+                this.searchStatus = I18n.get("gui.unboundmaps.searchNoResults");
+                return;
+            }
+        }
+        final ResourceLocation tagRl = tagRlTmp;
+
+        String norm = var1.toLowerCase(Locale.ROOT).replace('_', ' ');
+        List<WorldMapScreen.SearchHit> var5 = new ArrayList<>();
+        Minecraft var13 = this.minecraft;
+        int var6 = 8;
+        try {
+            var6 = var13.options.renderDistance().get();
+        } catch (Exception var14a) {
+        }
+
+        int var7 = var13.player != null ? Mth.floor(var13.player.getX()) >> 4 : Mth.floor(this.centerX) >> 4;
+        int var8 = var13.player != null ? Mth.floor(var13.player.getZ()) >> 4 : Mth.floor(this.centerZ) >> 4;
+
+        // 1) loaded chunks: walk the 4x4x4 biome cells of every section
+        outer:
+
+        for (int ring = 0; ring <= var6; ring++) {
+            for (int dx = -ring; dx <= ring; dx++) {
+                for (int dz = -ring; dz <= ring; dz++) {
+                    if (Math.max(Math.abs(dx), Math.abs(dz)) == ring) {
+                        ChunkAccess var11 = var9.getChunk(var7 + dx, var8 + dz, ChunkStatus.FULL, false);
+                        if (var11 instanceof LevelChunk chunk) {
+                            LevelChunkSection[] var12 = chunk.getSections();
+                            int var14 = chunk.getPos().x << 4;
+                            int var15 = chunk.getPos().z << 4;
+
+                            for (int var16 = 0; var16 < var12.length && var5.size() < 512; var16++) {
+                                LevelChunkSection var17 = var12[var16];
+                                if (var17 != null && !var17.hasOnlyAir()) {
+                                    int var18 = var9.getMinBuildHeight() + (var16 << 4);
+
+                                    for (int var19 = 0; var19 < 4 && var5.size() < 512; var19++) {
+                                        for (int var20 = 0; var20 < 4 && var5.size() < 512; var20++) {
+                                            for (int var21 = 0; var21 < 4 && var5.size() < 512; var21++) {
+                                                Holder<Biome> var22 = var17.getBiomes().get(var21, var20, var19);
+                                                if (this.biomeHolderMatches(var22, norm, tagQuery, tagRl)) {
+                                                    int var23 = var14 + (var21 << 2) + 2;
+                                                    int var24 = var18 + (var20 << 2) + 2;
+                                                    int var25 = var15 + (var19 << 2) + 2;
+                                                    var5.add(new WorldMapScreen.SearchHit(var23, var24, var25, this.biomeLabel(var22), -13996851));
+                                                    var19 = 4;
+                                                    var20 = 4;
+                                                    break;
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
+                            if (var5.size() >= 512) {
+                                break outer;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // 2) stored chunks: the whole explored map from the persistent store
+        if (var5.size() < 512 && MapStore.isEnabled()) {
+            ClientLevel level = var9;
+            MapStore.forEachStoredChunk((pos, palette, cols) -> {
+                if (var5.size() >= 512) {
+                    return;
+                }
+                int cx = ChunkPos.getX(pos);
+                int cz = ChunkPos.getZ(pos);
+                if (level.getChunk(cx, cz, ChunkStatus.FULL, false) != null) {
+                    return; // already covered by the live scan
+                }
+                for (int i = 0; i < 256; i++) {
+                    int idx = cols[i] & 0xFF;
+                    if (idx == 0xFF || idx >= palette.length) {
+                        continue;
+                    }
+                    if (this.biomeIdMatches(palette[idx], norm, tagQuery, tagRl)) {
+                        int[] heights = MapStore.storedHeights(level.dimension(), pos);
+                        int y = heights != null && heights[i] != Integer.MIN_VALUE ? heights[i] - 1 : 64;
+                        String label = this.biomeIdLabel(palette[idx]);
+                        var5.add(new WorldMapScreen.SearchHit(cx * 16 + (i & 15), y, cz * 16 + (i >> 4), label, -13996851));
+                        break;
+                    }
+                }
+            });
+        }
+
+        var5.sort(Comparator.comparingDouble(this::hitDist2));
+        this.searchResults = var5;
+        if (var5.isEmpty()) {
+            this.searchIndex = 0;
+            this.searchStatus = I18n.get("gui.unboundmaps.searchNoResults");
+        } else {
+            this.searchIndex = 0;
+            WorldMapScreen.SearchHit var20 = var5.get(0);
+            this.searchStatus = I18n.get("gui.unboundmaps.searchFound", var5.size())
+                + (var5.size() >= 512 ? "+" : "")
+                + " \u2014 "
+                + var20.label()
+                + " ["
+                + var20.x()
+                + ", "
+                + var20.y()
+                + ", "
+                + var20.z()
+                + "]";
+            this.centerOn(var20.x(), var20.z());
+        }
+    }
+
+    /** Localized biome name of a holder (works for live and resolved stored biomes). */
+    private String biomeHolderLabel(Holder<Biome> var0) {
+        return var0.unwrapKey()
+            .map(var1 -> Component.translatable(var1.location().toLanguageKey("biome")).getString())
+            .orElse("?");
+    }
+
+    private String biomeLabel(Holder<Biome> var0) {
+        return this.biomeHolderLabel(var0);
+    }
+
+    private String biomeIdLabel(String var0) {
+        ResourceLocation var1 = ResourceLocation.tryParse(var0);
+        if (var1 == null) {
+            return var0;
+        }
+        return Component.translatable(var1.toLanguageKey("biome")).getString();
+    }
+
+    /** Matches a biome holder: #tag, registry path (english) or localized name (current language). */
+    private boolean biomeHolderMatches(Holder<Biome> var0, String var1, boolean var2, ResourceLocation var3) {
+        if (var0 == null) {
+            return false;
+        }
+        try {
+            if (var2) {
+                return var0.is(TagKey.create(Registries.BIOME, var3));
+            }
+
+            ResourceLocation var4 = var0.unwrapKey().map(var5 -> var5.location()).orElse(null);
+            if (var4 != null && var4.getPath().toLowerCase(Locale.ROOT).replace('_', ' ').contains(var1)) {
+                return true;
+            }
+
+            return this.biomeHolderLabel(var0).toLowerCase(Locale.ROOT).contains(var1);
+        } catch (Exception var6) {
+            return false;
+        }
+    }
+
+    /** Matches a stored biome id (namespace:path) against the same query rules. */
+    private boolean biomeIdMatches(String var0, String var1, boolean var2, ResourceLocation var3) {
+        ResourceLocation var4 = ResourceLocation.tryParse(var0);
+        if (var4 == null) {
+            return false;
+        }
+        try {
+            ClientLevel var9 = this.minecraft.level;
+            if (var9 != null) {
+                net.minecraft.core.Registry<Biome> var10 = var9.registryAccess().registryOrThrow(Registries.BIOME);
+                Optional<Holder.Reference<Biome>> var5 = var10.getHolder(ResourceKey.create(Registries.BIOME, var4));
+                if (var5.isPresent()) {
+                    return this.biomeHolderMatches(var5.get(), var1, var2, var3);
+                }
+            }
+        } catch (Exception var6) {
+        }
+
+        return !var2 && var4.getPath().toLowerCase(Locale.ROOT).replace('_', ' ').contains(var1);
+    }
+
+    /** Matches a block against the query: #tag, registry id (mod:block), translation key or localized name. */
     private boolean blockMatches(net.minecraft.world.level.block.Block var1, String var2) {
         try {
+            if (var2.startsWith("#")) {
+                String var3t = var2.substring(1).trim().replace(' ', '_');
+                ResourceLocation var3r = ResourceLocation.tryParse(var3t.contains(":") ? var3t : "minecraft:" + var3t);
+                if (var3r == null) {
+                    return false;
+                }
+                return BuiltInRegistries.BLOCK.wrapAsHolder(var1).is(TagKey.create(Registries.BLOCK, var3r));
+            }
+
             if (BuiltInRegistries.BLOCK.getKey(var1).toString().contains(var2)) {
                 return true;
             }
@@ -794,10 +1073,12 @@ public class WorldMapScreen extends Screen {
                     float var9 = 5.0F + var3 * 2.0F + (var5 == this.searchIndex ? 3.0F : 0.0F);
                     DrawHelper.ring(var2, var7, var8, var9, var9 + 2.0F, 24, var5 == this.searchIndex ? -1 : var6.color());
                     if (var5 == this.searchIndex) {
+                        String var10 = var6.label() + " [" + var6.x() + ", " + var6.y() + ", " + var6.z() + "]";
+                        LabelPlacer.placeForce((float)var7 - this.font.width(var10) / 2.0F, (float)var8 - 14.0F, (float)this.font.width(var10), 10.0F);
                         var1.drawString(
                             this.font,
-                            var6.label() + " [" + var6.x() + ", " + var6.y() + ", " + var6.z() + "]",
-                            (int)var7 - this.font.width(var6.label()) / 2,
+                            var10,
+                            (int)var7 - this.font.width(var10) / 2,
                             (int)var8 - 14,
                             -1,
                             true
