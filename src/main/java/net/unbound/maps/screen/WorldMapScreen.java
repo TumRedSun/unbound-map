@@ -72,6 +72,41 @@ public class WorldMapScreen extends Screen {
     private String searchStatus;
     private String lastBlockQuery;
     private String lastBiomeQuery;
+    // settings panel (gear button) + transient status line
+    private double mousePosX = -1.0;
+    private double mousePosY = -1.0;
+    private boolean settingsOpen;
+    private int settingsPage;
+    private boolean resetArmed;
+    private String statusMsg;
+    private long statusUntil;
+    private int panelX;
+    private int panelY;
+    private int panelW;
+    private int panelH;
+    private static final int PAGE_SETTINGS = 0;
+    private static final int PAGE_COUNT = 6;
+    private static final int PANEL_WIDTH = 262;
+    private static final int PANEL_HEADER = 16;
+    private static final int PANEL_FOOTER = 16;
+    private static final int[] COLOR_PRESETS = new int[]{
+        (int)0xFFFD5B5C, (int)0xFFFFA726, (int)0xFFAB47BC, (int)0xFF42A5F5, (int)0xFF66BB6A, (int)0xFFFDD835
+    };
+    // settings row action ids
+    private static final int A_AUTOCAVE = 0;
+    private static final int A_NIGHTDIM = 1;
+    private static final int A_TERRAIN = 2;
+    private static final int A_BIOMECOL = 3;
+    private static final int A_LIGHT = 4;
+    private static final int A_RADAR = 5;
+    private static final int A_ANCHOR = 6;
+    private static final int A_BIGCENTERED = 7;
+    private static final int A_DEATHPOINTS = 8;
+    private static final int A_DEATHBEACON = 9;
+    private static final int A_OLDDEATHS = 10;
+    private static final int A_DEATHCOLOR = 11;
+    private static final int A_OLDDEATHCOLOR = 12;
+    private static final int A_RESET = 13;
 
     /** Current zoom of the world map (blocks per texture pixel), read by the cell cache for its LOD choice. */
     public static double currentBlocksPerPixel() {
@@ -171,25 +206,29 @@ public class WorldMapScreen extends Screen {
             }
 
             WaypointRenderer.drawWorldMapMarkers(var1, this.centerX, this.centerZ, var6 / 2.0, var7 / 2.0, this.blocksPerPixel);
+            var1.flush();
+            if (var2 >= 0 && var3 >= 0 && !this.settingsOpen) {
+                // highlight the marker under the cursor: this is the one the
+                // Del key (or the right-click menu) will act on
+                Waypoint hovered = this.findWaypointNear((double)var2, (double)var3);
+                if (hovered != null) {
+                    float hx = (float)(var6 / 2.0 + (hovered.x + 0.5 - this.centerX) / this.blocksPerPixel);
+                    float hy = (float)(var7 / 2.0 + (hovered.z + 0.5 - this.centerZ) / this.blocksPerPixel);
+                    DrawHelper.outline(var17, hx - 5.0F, hy - 5.0F, hx + 5.0F, hy + 5.0F, 1.0F, -1);
+                }
+            }
+
             this.renderSearchResults(var1);
             EntityRadar.drawWorldMap(var1, this.centerX, this.centerZ, var6, var7, this.blocksPerPixel, var5.player);
             RenderSystem.disableBlend();
         }
 
         this.renderCursorBar(var1, var2, var3);
-        String hint = I18n.get("gui.unboundmaps.hint");
-        String zoomSuffix = "  [" + String.format(Locale.ROOT, "%.2f blocks/px", this.blocksPerPixel) + "]";
-        List<String> lines = wrapSegments(hint, " | ", var6 - 20);
-        int firstY = var7 - 12 - (lines.size() - 1) * 11 - 1;
-        for (int li = 0; li < lines.size(); li++) {
-            String line = li == lines.size() - 1 ? lines.get(li) + zoomSuffix : lines.get(li);
-            if (li == lines.size() - 1) {
-                while (var5.font.width(line) > var6 - 20 && zoomSuffix.length() > 0) {
-                    zoomSuffix = zoomSuffix.substring(1);
-                    line = lines.get(li) + zoomSuffix;
-                }
-            }
-            var1.drawCenteredString(var5.font, line, var6 / 2, firstY + li * 11, -4668212);
+        String zoomText = I18n.get("gui.unboundmaps.zoomLabel", String.format(Locale.ROOT, "%.2f", this.blocksPerPixel));
+        var1.drawString(var5.font, zoomText, var6 - var5.font.width(zoomText) - 8, 8, -4668212, true);
+        this.renderGearButton(var1, var2, var3);
+        if (this.statusMsg != null && Util.getMillis() < this.statusUntil) {
+            var1.drawString(var5.font, this.statusMsg, 10, 30, -1643021, true);
         }
 
         this.renderHeightSlider(var1, var2, var3);
@@ -201,11 +240,15 @@ public class WorldMapScreen extends Screen {
         if (this.searchOpen && this.searchStatus != null) {
             var1.drawString(var5.font, this.searchStatus, 10, 30, -1643021, true);
         }
+
+        if (this.settingsOpen) {
+            this.renderSettingsPanel(var1, var2, var3);
+        }
     }
 
     /** Xaero-style view height slider: leftmost = AUTO, further right = fixed slice height. */
     private void renderHeightSlider(GuiGraphics var1, int var2, int var3) {
-        this.sliderX = this.width / 2 - SLIDER_WIDTH / 2;
+        this.sliderX = 12;
         this.sliderY = this.height - 40;
         boolean hover = var2 >= this.sliderX
             && var2 < this.sliderX + SLIDER_WIDTH
@@ -217,7 +260,7 @@ public class WorldMapScreen extends Screen {
         String label = I18n.get("gui.unboundmaps.heightLabel")
             + ": "
             + (CaveState.isAuto() ? I18n.get("gui.unboundmaps.caveAuto") : "Y=" + CaveState.fixedY());
-        var1.drawCenteredString(this.font, label, this.width / 2, this.sliderY - 11, CaveState.isAuto() ? -4668212 : -1643021);
+        var1.drawString(this.font, label, this.sliderX, this.sliderY - 11, CaveState.isAuto() ? -4668212 : -1643021, true);
         var1.fill(this.sliderX, this.sliderY + 3, this.sliderX + SLIDER_WIDTH, this.sliderY + 6, -12959930);
         var1.fill(this.sliderX, this.sliderY + 3, this.sliderX + 14, this.sliderY + 6, -1251747841);
         var1.fill(handleX, this.sliderY, handleX + handleW, this.sliderY + 9, hover || this.draggingSlider ? -1 : -6908266);
@@ -236,36 +279,18 @@ public class WorldMapScreen extends Screen {
             && var3 < this.sliderY + 14;
     }
 
-    /** Splits a hint string into centered lines no wider than maxWidth, keeping the separators. */
-    private static List<String> wrapSegments(String text, String sep, int maxWidth) {
+    /** Splits a (possibly multi-line) text into lines no wider than maxWidth, word-wrapped. */
+    private static List<String> wrapText(String text, int maxWidth) {
         net.minecraft.client.gui.Font font = Minecraft.getInstance().font;
-        String[] parts = text.split(java.util.regex.Pattern.quote(sep));
-        List<String> lines = new ArrayList<>();
-        StringBuilder current = new StringBuilder();
-        for (String part : parts) {
-            String candidate = current.length() == 0 ? part : current + sep + part;
-            if (current.length() > 0 && font.width(candidate) > maxWidth) {
-                lines.add(current.toString());
-                current = new StringBuilder(part);
-            } else {
-                current = new StringBuilder(candidate);
-            }
-        }
-
-        if (current.length() > 0) {
-            lines.add(current.toString());
-        }
-
-        // hard fallback: a single segment wider than the screen is split by words,
-        // so the hint can never run past the window edges
         List<String> out = new ArrayList<>();
-        for (String line : lines) {
-            if (font.width(line) <= maxWidth) {
-                out.add(line);
+
+        for (String para : text.split("\n")) {
+            if (para.isBlank()) {
+                out.add("");
                 continue;
             }
             StringBuilder cur = new StringBuilder();
-            for (String w : line.split(" ")) {
+            for (String w : para.trim().split(" ")) {
                 String cand = cur.length() == 0 ? w : cur + " " + w;
                 if (cur.length() > 0 && font.width(cand) > maxWidth) {
                     out.add(cur.toString());
@@ -387,6 +412,9 @@ public class WorldMapScreen extends Screen {
         double var6 = 144.0;
 
         for (Waypoint var9 : WaypointManager.currentWaypoints()) {
+            if (!WaypointRenderer.visible(var9)) {
+                continue;
+            }
             double var10 = this.width / 2.0 + (var9.x + 0.5 - this.centerX) / this.blocksPerPixel - var1;
             double var12 = this.height / 2.0 + (var9.z + 0.5 - this.centerZ) / this.blocksPerPixel - var3;
             double var14 = var10 * var10 + var12 * var12;
@@ -480,6 +508,9 @@ public class WorldMapScreen extends Screen {
     }
 
     public boolean mouseScrolled(double var1, double var3, double var5, double var7) {
+        if (this.settingsOpen) {
+            return true;
+        }
         if (this.overSlider(var1, var3)) {
             CaveState.adjustHeight(var7 > 0.0 ? 8 : -8);
             return true;
@@ -499,6 +530,9 @@ public class WorldMapScreen extends Screen {
     }
 
     public boolean mouseDragged(double var1, double var3, int var5, double var6, double var8) {
+        if (this.settingsOpen) {
+            return true;
+        }
         if (this.draggingSlider) {
             this.applySlider(var1);
             return true;
@@ -511,7 +545,31 @@ public class WorldMapScreen extends Screen {
         }
     }
 
+    @Override
+    public void mouseMoved(double var1, double var3) {
+        this.mousePosX = var1;
+        this.mousePosY = var3;
+        super.mouseMoved(var1, var3);
+    }
+
     public boolean mouseClicked(double var1, double var3, int var5) {
+        if (this.settingsOpen) {
+            if (var1 >= this.panelX && var1 < this.panelX + this.panelW && var3 >= this.panelY && var3 < this.panelY + this.panelH) {
+                this.handlePanelClick(var1, var3);
+            } else {
+                this.settingsOpen = false;
+                this.resetArmed = false;
+            }
+
+            return true;
+        }
+
+        if (var5 == 0 && !this.searchOpen && var1 >= 6.0 && var1 < 28.0 && var3 >= 6.0 && var3 < 28.0) {
+            this.settingsOpen = true;
+            this.settingsPage = PAGE_SETTINGS;
+            return true;
+        }
+
         if (this.searchOpen) {
             if (var5 == 0 && this.searchBox != null && var1 >= 6.0 && var1 < 272.0 && var3 >= 6.0 && var3 < 28.0) {
                 return super.mouseClicked(var1, var3, var5);
@@ -588,6 +646,20 @@ public class WorldMapScreen extends Screen {
             }
 
             return this.searchBox.keyPressed(var1, var2, var3) || super.keyPressed(var1, var2, var3) || true;
+        } else if (this.settingsOpen && var1 == 256) {
+            this.settingsOpen = false;
+            this.resetArmed = false;
+            return true;
+        } else if (var1 == 261 && !this.settingsOpen) {
+            // Del: delete the waypoint under the cursor - no menu needed
+            Waypoint varW = this.findWaypointNear(this.mousePosX, this.mousePosY);
+            if (varW != null) {
+                WaypointManager.remove(varW.id);
+                this.showStatus(I18n.get("gui.unboundmaps.waypointDeleted", varW.name));
+                return true;
+            }
+
+            return true;
         } else if (var1 == 70 && Screen.hasControlDown()) {
             this.openSearch();
             return true;
@@ -1232,6 +1304,304 @@ public class WorldMapScreen extends Screen {
         }
     }
 
+    /** Transient status line under the gear button (waypoint deleted, map reset, ...). */
+    private void showStatus(String var1) {
+        this.statusMsg = var1;
+        this.statusUntil = Util.getMillis() + 3000L;
+    }
+
+    /** Procedurally drawn gear button in the top-left corner (no unicode glyph dependency). */
+    private void renderGearButton(GuiGraphics var1, int var2, int var3) {
+        if (this.searchOpen) {
+            return;
+        }
+        boolean hover = var2 >= 6 && var2 < 28 && var3 >= 6 && var3 < 28;
+        var1.flush();
+        Matrix4f pose = var1.pose().last().pose();
+        int var4 = hover ? -1 : 0xFFC8CDD4;
+        if (hover) {
+            var1.fill(6, 6, 28, 28, 0x50FFFFFF);
+        }
+
+        DrawHelper.disc(pose, 17.0F, 17.0F, 4.6F, 16, var4);
+
+        for (int var5 = 0; var5 < 8; var5++) {
+            double var6 = var5 * (Math.PI / 4.0) + Math.PI / 8.0;
+            int var7 = 17 + (int)Math.round(Math.cos(var6) * 6.0);
+            int var8 = 17 + (int)Math.round(Math.sin(var6) * 6.0);
+            var1.fill(var7 - 1, var8 - 1, var7 + 2, var8 + 2, var4);
+        }
+
+        DrawHelper.disc(pose, 17.0F, 17.0F, 1.9F, 12, BG_OPAQUE);
+        var1.flush();
+        if (hover) {
+            String var9 = I18n.get("gui.unboundmaps.gearTooltip");
+            var1.drawString(this.font, var9, var2 + 10, var3 - 8, -1, true);
+        }
+    }
+
+    private List<WorldMapScreen.SettingsRow> buildSettingsRows() {
+        List<WorldMapScreen.SettingsRow> var0 = new ArrayList<>();
+        var0.add(new WorldMapScreen.SettingsRow(
+            I18n.get("gui.unboundmaps.set.autoCave"), this.onOff(UnboundConfig.AUTO_CAVE_MODE.get()), this.boolColor(UnboundConfig.AUTO_CAVE_MODE.get()), -1, A_AUTOCAVE
+        ));
+        int var1 = UnboundConfig.NIGHT_DIM_STRENGTH.get();
+        var0.add(new WorldMapScreen.SettingsRow(I18n.get("gui.unboundmaps.set.nightDim"), String.valueOf(var1), -2039584, -1, A_NIGHTDIM));
+        var0.add(new WorldMapScreen.SettingsRow(
+            I18n.get("gui.unboundmaps.set.terrain"), this.onOff(UnboundConfig.TERRAIN_SHADING.get()), this.boolColor(UnboundConfig.TERRAIN_SHADING.get()), -1, A_TERRAIN
+        ));
+        var0.add(new WorldMapScreen.SettingsRow(
+            I18n.get("gui.unboundmaps.set.biomeColors"), this.onOff(UnboundConfig.BIOME_SHADING.get()), this.boolColor(UnboundConfig.BIOME_SHADING.get()), -1, A_BIOMECOL
+        ));
+        var0.add(new WorldMapScreen.SettingsRow(
+            I18n.get("gui.unboundmaps.set.light"), this.onOff(UnboundConfig.LIGHT_SHADING.get()), this.boolColor(UnboundConfig.LIGHT_SHADING.get()), -1, A_LIGHT
+        ));
+        var0.add(new WorldMapScreen.SettingsRow(
+            I18n.get("gui.unboundmaps.set.radar"), this.onOff(UnboundConfig.ENTITY_RADAR.get()), this.boolColor(UnboundConfig.ENTITY_RADAR.get()), -1, A_RADAR
+        ));
+        var0.add(new WorldMapScreen.SettingsRow(
+            I18n.get("gui.unboundmaps.set.minimapPos"),
+            I18n.get("gui.unboundmaps.anchor." + UnboundConfig.MINIMAP_ANCHOR.get().name()),
+            -2039584,
+            -1,
+            A_ANCHOR
+        ));
+        var0.add(new WorldMapScreen.SettingsRow(
+            I18n.get("gui.unboundmaps.set.bigCentered"),
+            this.onOff(UnboundConfig.MINIMAP_BIG_CENTERED.get()),
+            this.boolColor(UnboundConfig.MINIMAP_BIG_CENTERED.get()),
+            -1,
+            A_BIGCENTERED
+        ));
+        var0.add(new WorldMapScreen.SettingsRow(
+            I18n.get("gui.unboundmaps.set.deathPoints"), this.onOff(UnboundConfig.DEATH_POINTS.get()), this.boolColor(UnboundConfig.DEATH_POINTS.get()), -1, A_DEATHPOINTS
+        ));
+        var0.add(new WorldMapScreen.SettingsRow(
+            I18n.get("gui.unboundmaps.set.deathBeacon"),
+            this.onOff(UnboundConfig.DEATH_BEACON.get()),
+            this.boolColor(UnboundConfig.DEATH_BEACON.get()),
+            -1,
+            A_DEATHBEACON
+        ));
+        var0.add(new WorldMapScreen.SettingsRow(
+            I18n.get("gui.unboundmaps.set.oldDeaths"),
+            this.onOff(UnboundConfig.SHOW_OLD_DEATH_POINTS.get()),
+            this.boolColor(UnboundConfig.SHOW_OLD_DEATH_POINTS.get()),
+            -1,
+            A_OLDDEATHS
+        ));
+        var0.add(new WorldMapScreen.SettingsRow(
+            I18n.get("gui.unboundmaps.set.deathColor"), "", -1, UnboundConfig.DEATH_COLOR.get() | 0xFF000000, A_DEATHCOLOR
+        ));
+        var0.add(new WorldMapScreen.SettingsRow(
+            I18n.get("gui.unboundmaps.set.oldDeathColor"), "", -1, UnboundConfig.DEATH_OLD_COLOR.get() | 0xFF000000, A_OLDDEATHCOLOR
+        ));
+        var0.add(new WorldMapScreen.SettingsRow(
+            this.resetArmed ? I18n.get("gui.unboundmaps.set.resetConfirm") : I18n.get("gui.unboundmaps.set.resetMap"),
+            "",
+            this.resetArmed ? -1749940 : -1,
+            -1,
+            A_RESET
+        ));
+        return var0;
+    }
+
+    private String onOff(boolean var1) {
+        return I18n.get(var1 ? "gui.unboundmaps.on" : "gui.unboundmaps.off");
+    }
+
+    private int boolColor(boolean var1) {
+        return var1 ? -8355712 : -6316128;
+    }
+
+    /** Click on a settings row: toggle / cycle its value. */
+    private void activateRow(int var0) {
+        switch (var0) {
+            case A_AUTOCAVE:
+                UnboundConfig.AUTO_CAVE_MODE.set(!UnboundConfig.AUTO_CAVE_MODE.get());
+                MapTileCache.onCaveViewChanged();
+                break;
+            case A_NIGHTDIM:
+                UnboundConfig.NIGHT_DIM_STRENGTH.set((UnboundConfig.NIGHT_DIM_STRENGTH.get() + 1) % 4);
+                break;
+            case A_TERRAIN:
+                UnboundConfig.TERRAIN_SHADING.set(!UnboundConfig.TERRAIN_SHADING.get());
+                this.clearBakedTiles();
+                break;
+            case A_BIOMECOL:
+                UnboundConfig.BIOME_SHADING.set(!UnboundConfig.BIOME_SHADING.get());
+                this.clearBakedTiles();
+                break;
+            case A_LIGHT:
+                UnboundConfig.LIGHT_SHADING.set(!UnboundConfig.LIGHT_SHADING.get());
+                this.clearBakedTiles();
+                break;
+            case A_RADAR:
+                UnboundConfig.ENTITY_RADAR.set(!UnboundConfig.ENTITY_RADAR.get());
+                break;
+            case A_ANCHOR:
+                UnboundConfig.Anchor[] var1 = UnboundConfig.Anchor.values();
+                UnboundConfig.MINIMAP_ANCHOR.set(var1[(UnboundConfig.MINIMAP_ANCHOR.get().ordinal() + 1) % var1.length]);
+                break;
+            case A_BIGCENTERED:
+                UnboundConfig.MINIMAP_BIG_CENTERED.set(!UnboundConfig.MINIMAP_BIG_CENTERED.get());
+                break;
+            case A_DEATHPOINTS:
+                UnboundConfig.DEATH_POINTS.set(!UnboundConfig.DEATH_POINTS.get());
+                break;
+            case A_DEATHBEACON:
+                UnboundConfig.DEATH_BEACON.set(!UnboundConfig.DEATH_BEACON.get());
+                break;
+            case A_OLDDEATHS:
+                UnboundConfig.SHOW_OLD_DEATH_POINTS.set(!UnboundConfig.SHOW_OLD_DEATH_POINTS.get());
+                break;
+            case A_DEATHCOLOR:
+                UnboundConfig.DEATH_COLOR.set(this.nextPreset(UnboundConfig.DEATH_COLOR.get()));
+                break;
+            case A_OLDDEATHCOLOR:
+                UnboundConfig.DEATH_OLD_COLOR.set(this.nextPreset(UnboundConfig.DEATH_OLD_COLOR.get()));
+                break;
+            case A_RESET:
+                if (this.resetArmed) {
+                    this.performMapReset();
+                    this.resetArmed = false;
+                } else {
+                    this.resetArmed = true;
+                }
+                break;
+        }
+    }
+
+    private int nextPreset(int var0) {
+        for (int var1 = 0; var1 < COLOR_PRESETS.length; var1++) {
+            if ((COLOR_PRESETS[var1] | 0xFF000000) == (var0 | 0xFF000000)) {
+                return COLOR_PRESETS[(var1 + 1) % COLOR_PRESETS.length] | 0xFF000000;
+            }
+        }
+
+        return COLOR_PRESETS[0] | 0xFF000000;
+    }
+
+    /** Shading options are baked into the tiles, so the caches must be rebuilt after a change. */
+    private void clearBakedTiles() {
+        MapTileCache.clearAll();
+        WorldMapCells.clearAll();
+    }
+
+    /** Wipes the explored map of the current dimension (waypoints are kept). */
+    private void performMapReset() {
+        boolean var0 = MapStore.resetCurrentDimension();
+        this.clearBakedTiles();
+        net.unbound.maps.mapdata.MinimapTexture.invalidateAll();
+        this.showStatus(I18n.get(var0 ? "gui.unboundmaps.mapResetDone" : "gui.unboundmaps.mapResetFail"));
+    }
+
+    private void renderSettingsPanel(GuiGraphics var1, int var2, int var3) {
+        int var4 = 8;
+        int var5 = 28;
+        int var6 = PANEL_WIDTH;
+        String var7;
+        List<String> var8 = List.of();
+        List<WorldMapScreen.SettingsRow> var9 = List.of();
+        if (this.settingsPage == PAGE_SETTINGS) {
+            var7 = I18n.get("gui.unboundmaps.settings");
+            var9 = this.buildSettingsRows();
+        } else {
+            var7 = I18n.get("gui.unboundmaps.guideTitle" + this.settingsPage);
+            var8 = wrapText(I18n.get("gui.unboundmaps.guide" + this.settingsPage), var6 - 14);
+        }
+
+        int var10 = this.settingsPage == PAGE_SETTINGS ? var9.size() * 12 + 2 : var8.size() * 10 + 4;
+        int var11 = Math.min(PANEL_HEADER + var10 + PANEL_FOOTER, this.height - var5 - 4);
+        int varMaxLines = (var11 - PANEL_HEADER - PANEL_FOOTER) / 10;
+        this.panelX = var4;
+        this.panelY = var5;
+        this.panelW = var6;
+        this.panelH = var11;
+        var1.fill(var4, var5, var4 + var6, var5 + var11, 0xF00E1014);
+        var1.renderOutline(var4, var5, var6, var11, -12500670);
+        var1.drawString(this.font, var7, var4 + 6, var5 + 4, -1, true);
+        var1.fill(var4 + 3, var5 + PANEL_HEADER - 2, var4 + var6 - 3, var5 + PANEL_HEADER - 1, -12500670);
+        int var12 = var5 + PANEL_HEADER + 1;
+        if (this.settingsPage == PAGE_SETTINGS) {
+            for (WorldMapScreen.SettingsRow var14 : var9) {
+                boolean var15 = var2 >= var4 + 2 && var2 < var4 + var6 - 2 && var3 >= var12 && var3 < var12 + 12;
+                if (var15) {
+                    var1.fill(var4 + 2, var12, var4 + var6 - 2, var12 + 12, 0x30FFFFFF);
+                }
+
+                var1.drawString(this.font, var14.label(), var4 + 6, var12 + 2, var14.action() == A_RESET && this.resetArmed ? -1749940 : -1, false);
+                if (var14.swatch() != -1) {
+                    int var16 = var4 + var6 - 18;
+                    var1.fill(var16, var12 + 2, var16 + 10, var12 + 10, -16645502);
+                    var1.fill(var16 + 2, var12 + 4, var16 + 8, var12 + 8, var14.swatch());
+                    var1.renderOutline(var16, var12 + 2, 10, 8, -10914234);
+                } else {
+                    var1.drawString(this.font, var14.value(), var4 + var6 - 6 - this.font.width(var14.value()), var12 + 2, var14.valueColor(), false);
+                }
+
+                var12 += 12;
+            }
+        } else {
+            int varLineIdx = 0;
+            for (String var14b : var8) {
+                if (varLineIdx >= varMaxLines) {
+                    break;
+                }
+                if (!var14b.isEmpty()) {
+                    var1.drawString(this.font, var14b, var4 + 7, var12, -2299710, false);
+                }
+
+                var12 += 10;
+                varLineIdx++;
+            }
+        }
+
+        int var13 = var5 + var11 - PANEL_FOOTER;
+        var1.fill(var4 + 3, var13 - 1, var4 + var6 - 3, var13, -12500670);
+        boolean var20 = var2 >= var4 + 4 && var2 < var4 + 18 && var3 >= var13 + 2 && var3 < var13 + 13;
+        boolean var21 = var2 >= var4 + var6 - 18 && var2 < var4 + var6 - 4 && var3 >= var13 + 2 && var3 < var13 + 13;
+        var1.fill(var4 + 4, var13 + 2, var4 + 18, var13 + 13, var20 ? 0x50FFFFFF : 0x28FFFFFF);
+        var1.fill(var4 + var6 - 18, var13 + 2, var4 + var6 - 4, var13 + 13, var21 ? 0x50FFFFFF : 0x28FFFFFF);
+        var1.drawCenteredString(this.font, "<", var4 + 11, var13 + 4, -1);
+        var1.drawCenteredString(this.font, ">", var4 + var6 - 11, var13 + 4, -1);
+        var1.drawCenteredString(this.font, I18n.get("gui.unboundmaps.page", this.settingsPage + 1, PAGE_COUNT), var4 + var6 / 2, var13 + 4, -6316128);
+    }
+
+    private void handlePanelClick(double var1, double var3) {
+        int var4 = this.panelX;
+        int var5 = this.panelY;
+        int var6 = this.panelW;
+        int var7 = this.panelH;
+        int var8 = var5 + var7 - PANEL_FOOTER;
+        if (var3 >= var8 + 2 && var3 < var8 + 13) {
+            if (var1 >= var4 + 4 && var1 < var4 + 18) {
+                this.settingsPage = (this.settingsPage + PAGE_COUNT - 1) % PAGE_COUNT;
+                return;
+            }
+
+            if (var1 >= var4 + var6 - 18 && var1 < var4 + var6 - 4) {
+                this.settingsPage = (this.settingsPage + 1) % PAGE_COUNT;
+                return;
+            }
+        }
+
+        if (this.settingsPage != PAGE_SETTINGS) {
+            return;
+        }
+        int var9 = var5 + PANEL_HEADER + 1;
+        if (var3 < var9) {
+            return;
+        }
+        int var10 = (int)((var3 - var9) / 12.0);
+        if (var10 >= 0) {
+            List<WorldMapScreen.SettingsRow> var11 = this.buildSettingsRows();
+            if (var10 < var11.size()) {
+                this.activateRow(var11.get(var10).action());
+            }
+        }
+    }
+
     public void onClose() {
         WaypointManager.saveNow();
         super.onClose();
@@ -1242,6 +1612,10 @@ public class WorldMapScreen extends Screen {
     }
 
     private record SearchHit(int x, int y, int z, String label, int color) {
+    }
+
+    /** One clickable row of the settings panel: label + right-aligned value or color swatch. */
+    private record SettingsRow(String label, String value, int valueColor, int swatch, int action) {
     }
 
     private static final class Menu {

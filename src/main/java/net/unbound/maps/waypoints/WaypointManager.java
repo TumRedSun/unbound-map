@@ -11,12 +11,16 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.Iterator;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.client.resources.language.I18n;
 import net.minecraft.core.BlockPos;
+import net.minecraft.network.chat.Component;
 import net.minecraft.resources.ResourceKey;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.level.Level;
@@ -29,7 +33,14 @@ import net.unbound.maps.util.StoragePaths;
 
 public final class WaypointManager {
     private static final Gson GSON = new GsonBuilder().setPrettyPrinting().create();
+    /** How many 'old death' waypoints are kept at most (oldest are dropped). */
+    private static final int MAX_OLD_DEATH_POINTS = 10;
+    /** Standing within 3 blocks of a death point for 5 seconds (100 ticks) clears it. */
+    private static final double DEATH_CLEAR_RADIUS_SQ = 9.0;
+    private static final int DEATH_CLEAR_TICKS = 100;
     private static final List<Waypoint> CURRENT = new ArrayList<>();
+    /** Per-death-waypoint dwell counter (ticks already spent within the clear radius). */
+    private static final Map<String, Integer> DEATH_DWELL = new HashMap<>();
     private static ResourceKey<Level> currentDimension;
     private static Path storageDir;
     private static boolean loaded;
@@ -67,28 +78,106 @@ public final class WaypointManager {
                 boolean var3 = var0.player.isDeadOrDying();
                 if (var3 && !wasDead && var1.getGameTime() - lastDeathTime > 600L) {
                     BlockPos var4 = var0.player.blockPosition();
+                    // demote the previous death point to 'old death point' so the
+                    // player can always tell where they died LAST from where they
+                    // died earlier
+                    for (Waypoint var5x : CURRENT) {
+                        if (var5x.type == Waypoint.TYPE_DEATH) {
+                            var5x.type = Waypoint.TYPE_OLD_DEATH;
+                            var5x.name = I18n.get("gui.unboundmaps.deathpointOld");
+                            var5x.colorARGB = UnboundConfig.DEATH_OLD_COLOR.get();
+                        }
+                    }
+
                     Waypoint var5 = new Waypoint(
                         UUID.randomUUID().toString(),
                         I18n.get("gui.unboundmaps.deathpoint"),
                         var4.getX(),
                         var4.getY(),
                         var4.getZ(),
-                        -1749940,
-                        false
+                        UnboundConfig.DEATH_COLOR.get(),
+                        UnboundConfig.DEATH_BEACON.get(),
+                        Waypoint.TYPE_DEATH
                     );
                     CURRENT.add(var5);
+                    trimOldDeathPoints();
                     lastDeathTime = var1.getGameTime();
                     saveNow();
                 }
 
                 wasDead = var3;
             }
+
+            tickDeathDwell(var0);
         } else {
             if (loaded) {
                 unload();
             }
 
             wasDead = false;
+        }
+    }
+
+    /**
+     * Death waypoints vanish once the player has spent 5 seconds within a
+     * 3-block radius of them: you came back, picked up your stuff, the marker
+     * has done its job. Applies to current and old death points alike.
+     */
+    private static void tickDeathDwell(Minecraft var0) {
+        if (CURRENT.isEmpty()) {
+            return;
+        }
+        net.minecraft.world.phys.Vec3 var1 = var0.player.position();
+        boolean var2 = false;
+        Iterator<Waypoint> var3 = CURRENT.iterator();
+
+        while (var3.hasNext()) {
+            Waypoint var4 = var3.next();
+            if (!var4.isDeath()) {
+                continue;
+            }
+            double var5 = var1.x - (var4.x + 0.5);
+            double var7 = var1.y - (var4.y + 0.5);
+            double var9 = var1.z - (var4.z + 0.5);
+            if (var5 * var5 + var7 * var7 + var9 * var9 <= DEATH_CLEAR_RADIUS_SQ) {
+                int var11 = DEATH_DWELL.merge(var4.id, 1, Integer::sum);
+                if (var11 >= DEATH_CLEAR_TICKS) {
+                    var3.remove();
+                    DEATH_DWELL.remove(var4.id);
+                    var2 = true;
+                    var0.player.displayClientMessage(Component.translatable("gui.unboundmaps.deathCleared"), true);
+                }
+            } else {
+                DEATH_DWELL.remove(var4.id);
+            }
+        }
+
+        if (var2) {
+            saveNow();
+        }
+    }
+
+    /** Keeps at most {@link #MAX_OLD_DEATH_POINTS} old death waypoints (oldest first out). */
+    private static void trimOldDeathPoints() {
+        int var0 = 0;
+
+        for (Waypoint var2 : CURRENT) {
+            if (var2.type == Waypoint.TYPE_OLD_DEATH) {
+                var0++;
+            }
+        }
+
+        int var1 = var0 - MAX_OLD_DEATH_POINTS;
+        if (var1 <= 0) {
+            return;
+        }
+        Iterator<Waypoint> var4 = CURRENT.iterator();
+
+        while (var4.hasNext() && var1 > 0) {
+            if (var4.next().type == Waypoint.TYPE_OLD_DEATH) {
+                var4.remove();
+                var1--;
+            }
         }
     }
 
@@ -167,6 +256,7 @@ public final class WaypointManager {
 
     private static void loadNow() {
         CURRENT.clear();
+        DEATH_DWELL.clear();
         loaded = true;
         wasDead = false;
         if (storageDir != null && currentDimension != null) {

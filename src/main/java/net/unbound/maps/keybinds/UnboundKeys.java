@@ -13,6 +13,7 @@ public final class UnboundKeys {
     public static final String CATEGORY = "key.categories.unboundmaps";
     public static final KeyMapping OPEN_MAP = new KeyMapping("key.unboundmaps.map", 77, "key.categories.unboundmaps");
     public static final KeyMapping OPEN_WAYPOINTS = new KeyMapping("key.unboundmaps.waypoints", 66, "key.categories.unboundmaps");
+    public static final KeyMapping MINIMAP_BIG = new KeyMapping("key.unboundmaps.minimap_big", 90, "key.categories.unboundmaps");
     public static final KeyMapping ZOOM_IN = new KeyMapping("key.unboundmaps.zoom_in", 61, "key.categories.unboundmaps");
     public static final KeyMapping ZOOM_OUT = new KeyMapping("key.unboundmaps.zoom_out", 45, "key.categories.unboundmaps");
     public static final KeyMapping TOGGLE_CAVE = new KeyMapping("key.unboundmaps.cave", 67, "key.categories.unboundmaps");
@@ -25,6 +26,7 @@ public final class UnboundKeys {
     public static void register(RegisterKeyMappingsEvent var0) {
         var0.register(OPEN_MAP);
         var0.register(OPEN_WAYPOINTS);
+        var0.register(MINIMAP_BIG);
         var0.register(ZOOM_IN);
         var0.register(ZOOM_OUT);
         var0.register(TOGGLE_CAVE);
@@ -41,6 +43,10 @@ public final class UnboundKeys {
 
             while (OPEN_WAYPOINTS.consumeClick()) {
                 var0.setScreen(new WaypointListScreen());
+            }
+
+            while (MINIMAP_BIG.consumeClick()) {
+                MinimapHud.toggleBig();
             }
 
             while (ZOOM_IN.consumeClick()) {

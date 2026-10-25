@@ -25,9 +25,20 @@ import org.joml.Matrix4f;
 public final class MinimapHud {
     private static final int[] ZOOM_LEVELS = new int[]{32, 64, 128};
     private static int zoomIndex = 1;
+    /** Enlarged minimap state, toggled with the (default Z) key. */
+    private static boolean big;
     public static final Layer LAYER = MinimapHud::render;
 
     private MinimapHud() {
+    }
+
+    /** Z key: show a much larger minimap (centered or in the same corner, per config). */
+    public static void toggleBig() {
+        big = !big;
+    }
+
+    public static boolean isBig() {
+        return big;
     }
 
     public static void zoomIn() {
@@ -53,8 +64,25 @@ public final class MinimapHud {
                 var0.flush();
                 LabelPlacer.begin();
                 int var5 = Math.max(32, UnboundConfig.MINIMAP_SIZE.get()) / 2;
-                int var6 = var0.guiWidth() - var5 - 8;
-                int var7 = var5 + 8;
+                if (big) {
+                    int var5b = Math.min(var0.guiWidth(), var0.guiHeight()) / 2 - 16;
+                    var5 = Math.min(var5 * 2, Math.max(var5, var5b));
+                }
+
+                // anchor: the configured corner, or the screen center for the
+                // enlarged mode when bigMapCentered is on
+                UnboundConfig.Anchor var5c = UnboundConfig.MINIMAP_ANCHOR.get();
+                boolean var5d = big && UnboundConfig.MINIMAP_BIG_CENTERED.get();
+                int var6 = var5d
+                    ? var0.guiWidth() / 2
+                    : var5c == UnboundConfig.Anchor.TOP_LEFT || var5c == UnboundConfig.Anchor.BOTTOM_LEFT
+                        ? var5 + 8
+                        : var0.guiWidth() - var5 - 8;
+                int var7 = var5d
+                    ? var0.guiHeight() / 2
+                    : var5c == UnboundConfig.Anchor.TOP_LEFT || var5c == UnboundConfig.Anchor.TOP_RIGHT
+                        ? var5 + 8
+                        : var0.guiHeight() - var5 - 8;
                 float var8 = ZOOM_LEVELS[zoomIndex];
                 boolean var9 = UnboundConfig.MINIMAP_SHAPE.get() == UnboundConfig.Shape.SQUARE;
                 double var10 = var3.getX();
@@ -78,27 +106,29 @@ public final class MinimapHud {
                 // map texture drawn through the immediate path - flush before the
                 // batched labels so ordering and GL state stay deterministic
                 var0.flush();
-                var0.drawString(
-                    var2.font,
-                    "N",
-                    var6 - var2.font.width("N") / 2,
-                    Math.max(1, var7 - var5 - 11),
-                    -4668212,
-                    true
-                );
-                WaypointRenderer.drawMinimapMarkers(var0, var6, var7, var5, var8, var10, var12, var9);
-                EntityRadar.draw(var0, var6, var7, var5, var8, var10, var12, var9);
-                DrawHelper.playerArrow(var17, var6, var7, var3.getYRot());
-                var0.flush();
+                // compute the info panel position FIRST: with bottom anchors it
+                // flips above the map and the N label must move on top of it
                 boolean var30 = UnboundConfig.SHOW_COORDS.get();
                 boolean var31 = UnboundConfig.SHOW_BIOME.get();
                 boolean var20 = MapTileCache.isCave();
                 int var21 = (var30 ? 1 : 0) + (var31 ? 1 : 0) + (var20 ? 1 : 0);
+                int var25 = var7 + var5 + 7;
+                int var23 = var21 * 10 + 4;
+                boolean panelAbove = false;
+                if (var21 > 0 && var25 + var23 > var0.guiHeight() - 2) {
+                    // bottom-anchored maps put the info panel ABOVE the map
+                    var25 = Math.max(2, var7 - var5 - 7 - var23);
+                    panelAbove = true;
+                }
+                int nLabelY = panelAbove ? var25 - 11 : var7 - var5 - 11;
+                var0.drawString(var2.font, "N", var6 - var2.font.width("N") / 2, Math.max(1, nLabelY), -4668212, true);
+                WaypointRenderer.drawMinimapMarkers(var0, var6, var7, var5, var8, var10, var12, var9);
+                EntityRadar.draw(var0, var6, var7, var5, var8, var10, var12, var9);
+                DrawHelper.playerArrow(var17, var6, var7, var3.getYRot());
+                var0.flush();
                 if (var21 > 0) {
                     int var22 = 2 * var5 + 6;
-                    int var23 = var21 * 10 + 4;
                     int var24 = Mth.clamp(var6 - var5 - 3, 2, Math.max(2, var0.guiWidth() - var22 - 2));
-                    int var25 = var7 + var5 + 7;
                     var0.fill(var24, var25, var24 + var22, var25 + var23, -1945104364);
                     // renderOutline takes (x, y, WIDTH, HEIGHT) in 1.21.1
                     var0.renderOutline(var24, var25, var22, var23, 1711276032);

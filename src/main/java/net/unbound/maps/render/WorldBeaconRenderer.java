@@ -57,7 +57,7 @@ public final class WorldBeaconRenderer {
                         double var15 = var5 == Integer.MAX_VALUE ? Double.MAX_VALUE : (double)var5 * var5;
 
                         for (Waypoint var18 : var6) {
-                            if (var18.beacon) {
+                            if (WaypointRenderer.effectiveBeacon(var18) && WaypointRenderer.visible(var18)) {
                                 if (!Double.isFinite(var18.x) || !Double.isFinite(var18.y) || !Double.isFinite(var18.z)) {
                                     continue;
                                 }
@@ -69,9 +69,9 @@ public final class WorldBeaconRenderer {
                                     float var25 = Math.max(var18.y - 1, var8);
                                     float var26 = var7;
                                     float var27 = 0.35F;
-                                    int var28 = var18.colorARGB >>> 16 & 0xFF;
-                                    int var29 = var18.colorARGB >>> 8 & 0xFF;
-                                    int var30 = var18.colorARGB & 0xFF;
+                                    int var28 = WaypointRenderer.effectiveColor(var18) >>> 16 & 0xFF;
+                                    int var29 = WaypointRenderer.effectiveColor(var18) >>> 8 & 0xFF;
+                                    int var30 = WaypointRenderer.effectiveColor(var18) & 0xFF;
                                     int var31 = 70;
                                     vertex(var13, var11, var23 - var27, var25, var24, var28, var29, var30, var31);
                                     vertex(var13, var11, var23 - var27, var26, var24, var28, var29, var30, var31);

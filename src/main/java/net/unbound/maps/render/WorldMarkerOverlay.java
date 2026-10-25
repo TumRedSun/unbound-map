@@ -67,6 +67,10 @@ public final class WorldMarkerOverlay {
                         break;
                     }
 
+                    if (!WaypointRenderer.visible(var19)) {
+                        continue;
+                    }
+
                     double var20 = var19.x + 0.5;
                     double var22 = var19.y + 1.0;
                     double var24 = var19.z + 0.5;
@@ -90,8 +94,9 @@ public final class WorldMarkerOverlay {
     private static void drawLabel(GuiGraphics var0, Font var1, Waypoint var2, ScreenProjector.Result var3, int var4, int var5) {
         int var6 = (int)Mth.clamp(var3.x, 14.0F, (float)Math.max(var4 - 14, 14));
         int var7 = (int)Mth.clamp(var3.y, 22.0F, (float)Math.max(var5 - 34, 22));
-        var0.fill(var6 - 2, var7 - 2, var6 + 3, var7 + 3, var2.colorARGB);
-        var0.renderOutline(var6 - 3, var7 - 3, 7, 7, var2.beacon ? -922746881 : -267382764);
+        boolean var6b = WaypointRenderer.effectiveBeacon(var2);
+        var0.fill(var6 - 2, var7 - 2, var6 + 3, var7 + 3, WaypointRenderer.effectiveColor(var2));
+        var0.renderOutline(var6 - 3, var7 - 3, 7, 7, var6b ? -922746881 : -267382764);
         String var8 = (int)Math.round(var3.distance) + "m";
         String var9 = var2.name;
         String var10 = var9 + " " + var8;

@@ -47,6 +47,25 @@ and it does not pretend to be them. Addons should integrate through the stable p
   `unboundmaps/servers/<ip>/map/<dimension>` for servers
 - Waypoints saved per world / per server and per dimension as JSON, with optional
   death points, in-world beacon beams and on-screen floating labels
+- **Waypoint quick delete**: hover a marker on the world map and press `Del` —
+  no menu needed; the marker under the cursor is highlighted
+- **Death points done right**: the newest death is labeled "Death point" and older
+  ones become "Old death points" (own color, hideable, capped at 10). Standing
+  within 3 blocks of a death point for 5 seconds removes it automatically.
+  Colors, the beacon and the old-point visibility are configurable, and the
+  settings are also reachable from the in-map gear menu
+- **Map settings & guides panel**: the gear button in the top-left corner of the
+  world map opens a paged panel — page 1 holds the map/minimap/death-point
+  settings (auto cave mode, night dim, shading, radar, minimap corner, death
+  colors/beacon, map file reset with a confirmation step), the following pages
+  are built-in guides (waypoints, waypoint settings, search, caves & height,
+  minimap), flipped with the arrows at the bottom of the panel
+- **Enlarged minimap** (default key `Z`): toggles a much bigger minimap, either
+  centered on the screen or in the same corner — configurable; the minimap corner
+  itself is a config option too
+- **Reset map file** button in the map settings: wipes the explored map data of
+  the current dimension (region files + discovery index) after a double-click
+  confirmation; waypoints are kept
 - A small API (`net.unbound.maps.api.UnboundMapsApi`) for other mods to add / remove /
   list waypoints
 - The world map bakes its tiles progressively (a per-frame budget) and uses block

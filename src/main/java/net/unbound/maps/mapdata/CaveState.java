@@ -119,6 +119,18 @@ public final class CaveState {
             initialized = false;
             return;
         }
+        if (!configAllowsAuto()) {
+            // auto switching is disabled in the mod config: keep the top view
+            // unless the player pins a fixed height manually (C key / slider)
+            if (undergroundStable) {
+                undergroundStable = false;
+                MapTileCache.onCaveViewChanged();
+            }
+
+            underground = false;
+            initialized = false;
+            return;
+        }
         int eye = Mth.floor(player.getEyeY());
         long pos = player.blockPosition().asLong();
         boolean changedColumn = pos != lastUndergroundPos;

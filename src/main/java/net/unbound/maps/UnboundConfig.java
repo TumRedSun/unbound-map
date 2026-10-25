@@ -12,9 +12,15 @@ public final class UnboundConfig {
     public static final BooleanValue MINIMAP_ENABLED;
     public static final EnumValue<UnboundConfig.Shape> MINIMAP_SHAPE;
     public static final IntValue MINIMAP_SIZE;
+    public static final EnumValue<UnboundConfig.Anchor> MINIMAP_ANCHOR;
+    public static final BooleanValue MINIMAP_BIG_CENTERED;
     public static final BooleanValue SHOW_COORDS;
     public static final BooleanValue SHOW_BIOME;
     public static final BooleanValue DEATH_POINTS;
+    public static final IntValue DEATH_COLOR;
+    public static final IntValue DEATH_OLD_COLOR;
+    public static final BooleanValue DEATH_BEACON;
+    public static final BooleanValue SHOW_OLD_DEATH_POINTS;
     public static final BooleanValue BEAMS_UNLIMITED;
     public static final IntValue BEAM_RENDER_DISTANCE;
     public static final BooleanValue BEAM_SEE_THROUGH;
@@ -43,11 +49,35 @@ public final class UnboundConfig {
         MINIMAP_ENABLED = var0.comment("Show the HUD minimap").define("enabled", true);
         MINIMAP_SHAPE = var0.comment("Minimap frame shape: SQUARE or ROUND").defineEnum("shape", UnboundConfig.Shape.SQUARE);
         MINIMAP_SIZE = var0.comment("Minimap side length in GUI pixels (64 - 256)").defineInRange("size", 140, 64, 256);
+        MINIMAP_ANCHOR = var0.comment(
+                "Corner of the screen where the minimap HUD is shown."
+            )
+            .defineEnum("anchor", UnboundConfig.Anchor.TOP_RIGHT);
+        MINIMAP_BIG_CENTERED = var0.comment(
+                "When the enlarged minimap is toggled (default key Z), place it\n",
+                "in the center of the screen instead of the configured corner."
+            )
+            .define("bigMapCentered", true);
         SHOW_COORDS = var0.comment("Show X/Y/Z under the minimap").define("showCoordinates", true);
         SHOW_BIOME = var0.comment("Show the current biome under the minimap").define("showBiome", true);
         var0.pop();
         var0.push("waypoints");
-        DEATH_POINTS = var0.comment("Automatically add a red waypoint when the player dies").define("deathPoints", true);
+        DEATH_POINTS = var0.comment(
+                "Automatically add a death waypoint when the player dies.\n",
+                "The newest death point is drawn with deathPointColor and\n",
+                "labeled as the current one, older ones become 'old death\n",
+                "points'. Standing within 3 blocks of a death point for 5\n",
+                "seconds removes it automatically (you came back for your loot)."
+            )
+            .define("deathPoints", true);
+        DEATH_COLOR = var0.comment("Color (ARGB) of the newest death waypoint")
+            .defineInRange("deathPointColor", 0xFFFD5B5C, Integer.MIN_VALUE, Integer.MAX_VALUE);
+        DEATH_OLD_COLOR = var0.comment("Color (ARGB) of old death waypoints")
+            .defineInRange("oldDeathPointColor", 0xFF8F4D4F, Integer.MIN_VALUE, Integer.MAX_VALUE);
+        DEATH_BEACON = var0.comment("Draw a beacon beam at death waypoints")
+            .define("deathPointBeacon", false);
+        SHOW_OLD_DEATH_POINTS = var0.comment("Show the old (not the newest) death waypoints")
+            .define("showOldDeathPoints", true);
         BEAMS_UNLIMITED = var0.comment(
                 "Render beacon beams (and the on-screen waypoint labels)\n",
                 "at unlimited distance, like Xaero does. When false,\n",
@@ -160,5 +190,12 @@ public final class UnboundConfig {
     public static enum Shape {
         SQUARE,
         ROUND;
+    }
+
+    public static enum Anchor {
+        TOP_LEFT,
+        TOP_RIGHT,
+        BOTTOM_LEFT,
+        BOTTOM_RIGHT;
     }
 }

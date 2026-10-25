@@ -367,6 +367,43 @@ public final class MapStore {
         }
     }
 
+    /**
+     * Wipes the map data of the CURRENT dimension: every region file and the
+     * discovery index are deleted from disk and the in-memory cache is dropped,
+     * so the map starts exploring from scratch. Waypoints are NOT touched.
+     * Callers must also clear MapTileCache / WorldMapCells / MinimapTexture.
+     */
+    public static boolean resetCurrentDimension() {
+        if (dimension == null) {
+            return false;
+        }
+        REGIONS.clear();
+        DIRTY_REGIONS.clear();
+        BIOMES.clear();
+        BLOCKS.clear();
+        discoveryDirty = false;
+        if (dimensionDir == null) {
+            return true;
+        }
+        try {
+            if (Files.isDirectory(dimensionDir)) {
+                try (var var0 = Files.list(dimensionDir)) {
+                    for (Path var1 : var0.toList()) {
+                        String var2 = var1.getFileName().toString();
+                        if (var2.equals("discovery.json") || var2.startsWith("r.") && var2.endsWith(".bin")) {
+                            Files.deleteIfExists(var1);
+                        }
+                    }
+                }
+            }
+
+            return true;
+        } catch (Exception var3) {
+            UnboundMapsMod.LOGGER.warn("Unbound Maps: failed to reset the map file: {}", var3.toString());
+            return false;
+        }
+    }
+
     /** Flushes dirty regions and the discovery index. Called on autosave, dimension change and logout. */
     public static void saveDirty() {
         if (!enabled || dimension == null) {
