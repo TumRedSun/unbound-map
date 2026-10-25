@@ -52,14 +52,14 @@ public final class MapTileCache {
         0.10F, 0.13F, 0.16F, 0.19F, 0.22F, 0.25F, 0.29F, 0.33F,
         0.38F, 0.43F, 0.49F, 0.56F, 0.64F, 0.73F, 0.85F, 1.00F
     };
-    /** How much of the sky light is removed at full night. 0.50 keeps the map readable, like Xaero. */
-    private static final float NIGHT_DIM_STRENGTH = 0.50F;
+    /** How much sky light each night-dim step removes (config 0..3; 0 = Xaero-like constant colors). */
+    private static final float NIGHT_STEP = 0.12F;
     private static int lastDarken = -1;
-    private static boolean nightDim = true;
+    private static int nightStrength = 0;
     /** Global look: gentle gamma lift (brighter mids) + mild saturation boost, applied to every rendered pixel. */
     private static final int[] ENHANCE_LUT = new int[256];
-    private static final float ENHANCE_GAMMA = 0.87F;
-    private static final float ENHANCE_SATURATION = 1.14F;
+    private static final float ENHANCE_GAMMA = 0.92F;
+    private static final float ENHANCE_SATURATION = 1.06F;
 
     static {
         for (int i = 0; i < 256; i++) {
@@ -98,18 +98,20 @@ public final class MapTileCache {
             MinimapTexture.invalidateAll();
         }
 
-        // Dynamic day/night: when the sky darkness level changes, surface tiles
-        // are re-baked so the map brightens at dawn and darkens at dusk while
-        // torch/lava light keeps glowing. Slice tiles are block-light driven
-        // and are intentionally not re-scanned here.
-        nightDim = flag(UnboundConfig.NIGHT_DIM, true);
+        // Dynamic day/night: only when the user opted into a night tint, surface
+        // tiles are re-baked so dusk/dawn show. With strength 0 (default) the map
+        // keeps its colors around the clock, exactly like Xaero's world map.
+        nightStrength = intFlag(UnboundConfig.NIGHT_DIM_STRENGTH, 0);
         Minecraft mc = Minecraft.getInstance();
         if (mc.level != null) {
             int darken = mc.level.getSkyDarken();
             if (darken != lastDarken) {
                 lastDarken = darken;
-                CHUNKS.clear();
-                MinimapTexture.invalidateAll();
+                if (nightStrength > 0) {
+                    CHUNKS.clear();
+                    WorldMapCells.clearAll();
+                    MinimapTexture.invalidateAll();
+                }
             }
         }
     }
@@ -121,8 +123,8 @@ public final class MapTileCache {
     private static float lightShade(ClientLevel var0, int var1, int var2, boolean var3) {
         float var4 = LIGHT_CURVE[var2 & 15];
         float var5 = LIGHT_CURVE[var1 & 15];
-        if (var3 && nightDim) {
-            var5 *= 1.0F - NIGHT_DIM_STRENGTH * (float)var0.getSkyDarken() / 15.0F;
+        if (var3 && nightStrength > 0) {
+            var5 *= 1.0F - nightStrength * NIGHT_STEP * (float)var0.getSkyDarken() / 15.0F;
         }
 
         return Math.max(0.10F, Math.max(var4, var5));
@@ -163,7 +165,7 @@ public final class MapTileCache {
      * staying full-bright at night.
      */
     private static void applyStoredLight(MapTileCache.Entry var0, int var1) {
-        float var2 = nightDim ? 1.0F - NIGHT_DIM_STRENGTH * (float)var1 / 15.0F : 1.0F;
+        float var2 = 1.0F - nightStrength * NIGHT_STEP * (float)var1 / 15.0F;
 
         for (int var3 = 0; var3 < 256; var3++) {
             if (var0.colors[var3] != UNKNOWN) {
@@ -185,7 +187,7 @@ public final class MapTileCache {
      * nibbles (same sampling positions as the old per-pixel applyLight).
      */
     private static void applyLightNibbles(MapTileCache.Entry var0, byte[] var1, boolean var2) {
-        float var3 = var2 && nightDim ? 1.0F - NIGHT_DIM_STRENGTH * (float)currentDarken() / 15.0F : 1.0F;
+        float var3 = var2 ? 1.0F - nightStrength * NIGHT_STEP * (float)currentDarken() / 15.0F : 1.0F;
 
         for (int var4 = 0; var4 < 256; var4++) {
             int var5 = var1[var4] & 0xFF;
@@ -244,6 +246,14 @@ public final class MapTileCache {
     }
 
     private static boolean flag(net.neoforged.neoforge.common.ModConfigSpec.BooleanValue var0, boolean var1) {
+        try {
+            return var0.get();
+        } catch (NullPointerException | IllegalStateException var2) {
+            return var1;
+        }
+    }
+
+    private static int intFlag(net.neoforged.neoforge.common.ModConfigSpec.IntValue var0, int var1) {
         try {
             return var0.get();
         } catch (NullPointerException | IllegalStateException var2) {
@@ -532,11 +542,11 @@ public final class MapTileCache {
                     if (var3.colors[var11] != -15723752) {
                         int var12 = var3.heights[var11];
                         int var13 = heightAt(var3, var5, var7, var10 - 1, var9 - 1, var12);
-                        float var14 = Mth.clamp(1.0F + (float)(var12 - var13) * 0.1F, 0.7F, 1.35F);
+                        float var14 = Mth.clamp(1.0F + (float)(var12 - var13) * 0.06F, 0.82F, 1.18F);
                         int var15 = heightAt(var3, var6, null, var10 + 1, var9, var12);
                         int var16 = heightAt(var3, var8, null, var10, var9 + 1, var12);
                         if (Math.abs(var12 - var15) >= 4 || Math.abs(var12 - var16) >= 4) {
-                            var14 *= 0.88F;
+                            var14 *= 0.94F;
                         }
 
                         if (var14 != 1.0F) {

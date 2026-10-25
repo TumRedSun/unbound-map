@@ -84,7 +84,7 @@ public final class MinimapHud {
                     int var24 = var6 - var5 - 3;
                     int var25 = var7 + var5 + 7;
                     var0.fill(var24, var25, var24 + var22, var25 + var23, -1945104364);
-                    var0.renderOutline(var24, var25, var24 + var22, var25 + var23, 1711276032);
+                    var0.renderOutline(var24, var25, var22, var23, 1711276032);
                     int var26 = var25 + 3;
                     if (var20) {
                         String var21c = I18n.get("gui.unboundmaps.caveLabel")
@@ -133,9 +133,10 @@ public final class MinimapHud {
         int var22 = Mth.floor(var14);
         int var23 = Mth.floor(var15);
         int var24 = Mth.floor(var16);
-        var0.renderOutline(var21 - 2, var22 - 2, var23 + 2, var24 + 2, -267382764);
-        var0.renderOutline(var21 - 1, var22 - 1, var23 + 1, var24 + 1, -267382764);
-        var0.renderOutline(var21, var22, var23, var24, -1879048192);
+        // renderOutline takes (x, y, WIDTH, HEIGHT) in 1.21.1
+        var0.renderOutline(var21 - 2, var22 - 2, var23 - var21 + 4, var24 - var22 + 4, -267382764);
+        var0.renderOutline(var21 - 1, var22 - 1, var23 - var21 + 2, var24 - var22 + 2, -267382764);
+        var0.renderOutline(var21, var22, var23 - var21, var24 - var22, -1879048192);
     }
 
     private static void renderRound(Matrix4f var0, int var1, int var2, int var3, float var4, double var5, double var7, int var9, int var10, float var11) {

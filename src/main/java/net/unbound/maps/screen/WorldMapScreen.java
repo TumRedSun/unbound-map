@@ -97,15 +97,20 @@ public class WorldMapScreen extends Screen {
         int var6 = this.width;
         int var7 = this.height;
         var1.fill(0, 0, var6, var7, BG_OPAQUE);
+        // draw the opaque background NOW: the map tiles below are drawn through
+        // the Tesselator (immediate), while fill() batches into the gui buffer -
+        // flushing here fixes their draw order deterministically
+        var1.flush();
         ClientLevel var8 = var5.level;
         if (var8 != null) {
             WorldMapCells.ensureVisible(var8, this.centerX, this.centerZ, var6, var7, this.blocksPerPixel);
             double var9 = this.centerX - var6 / 2.0 * this.blocksPerPixel;
             double var11 = this.centerZ - var7 / 2.0 * this.blocksPerPixel;
-            int var13 = Math.floorDiv(Mth.floor(var9), 512);
-            int var14 = Math.floorDiv(Mth.floor(var9 + var6 * this.blocksPerPixel), 512);
-            int var15 = Math.floorDiv(Mth.floor(var11), 512);
-            int var16 = Math.floorDiv(Mth.floor(var11 + var7 * this.blocksPerPixel), 512);
+            int cellSize = WorldMapCells.cellBlocks();
+            int var13 = Math.floorDiv(Mth.floor(var9), cellSize);
+            int var14 = Math.floorDiv(Mth.floor(var9 + var6 * this.blocksPerPixel), cellSize);
+            int var15 = Math.floorDiv(Mth.floor(var11), cellSize);
+            int var16 = Math.floorDiv(Mth.floor(var11 + var7 * this.blocksPerPixel), cellSize);
             Matrix4f var17 = var1.pose().last().pose();
             RenderSystem.enableBlend();
             RenderSystem.defaultBlendFunc();
@@ -114,20 +119,20 @@ public class WorldMapScreen extends Screen {
                 for (int var19 = var13; var19 <= var14; var19++) {
                     WorldMapCells.Cell var20 = WorldMapCells.cell(var19, var18);
                     if (var20 != null) {
-                        float var21 = (float)(var19 * 512L);
-                        float var22 = (float)(var18 * 512L);
-                        float var23 = (float)((var21 - var9) / this.blocksPerPixel);
-                        float var24 = (float)((var22 - var11) / this.blocksPerPixel);
-                        float var25 = (float)(512.0 / this.blocksPerPixel);
-                        float var26 = Math.max(var23, 0.0F);
-                        float var27 = Math.max(var24, 0.0F);
-                        float var28 = Math.min(var23 + var25, (float)var6);
-                        float var29 = Math.min(var24 + var25, (float)var7);
+                        double wx = (double)var19 * (double)cellSize;
+                        double wz = (double)var18 * (double)cellSize;
+                        double sx = (wx - var9) / this.blocksPerPixel;
+                        double sy = (wz - var11) / this.blocksPerPixel;
+                        double ss = (double)cellSize / this.blocksPerPixel;
+                        float var26 = Math.max((float)sx, 0.0F);
+                        float var27 = Math.max((float)sy, 0.0F);
+                        float var28 = Math.min((float)(sx + ss), (float)var6);
+                        float var29 = Math.min((float)(sy + ss), (float)var7);
                         if (!(var28 <= var26) && !(var29 <= var27)) {
-                            float var30 = (var26 - var23) / var25;
-                            float var31 = (var27 - var24) / var25;
-                            float var32 = (var28 - var23) / var25;
-                            float var33 = (var29 - var24) / var25;
+                            float var30 = (float)(((var26 - sx) / ss));
+                            float var31 = (float)(((var27 - sy) / ss));
+                            float var32 = (float)(((var28 - sx) / ss));
+                            float var33 = (float)(((var29 - sy) / ss));
                             DrawHelper.texturedQuad(var17, var20.location, var26, var27, var28, var29, var30, var31, var32, var33);
                         }
                     }
@@ -205,7 +210,7 @@ public class WorldMapScreen extends Screen {
         var1.fill(this.sliderX, this.sliderY + 3, this.sliderX + SLIDER_WIDTH, this.sliderY + 6, -12959930);
         var1.fill(this.sliderX, this.sliderY + 3, this.sliderX + 14, this.sliderY + 6, -1251747841);
         var1.fill(handleX, this.sliderY, handleX + handleW, this.sliderY + 9, hover || this.draggingSlider ? -1 : -6908266);
-        var1.renderOutline(handleX - 1, this.sliderY - 1, handleX + handleW + 1, this.sliderY + 10, -267382764);
+        var1.renderOutline(handleX - 1, this.sliderY - 1, handleW + 2, 11, -267382764);
     }
 
     private void applySlider(double var1) {
@@ -240,7 +245,30 @@ public class WorldMapScreen extends Screen {
             lines.add(current.toString());
         }
 
-        return lines.isEmpty() ? List.of(text) : lines;
+        // hard fallback: a single segment wider than the screen is split by words,
+        // so the hint can never run past the window edges
+        List<String> out = new ArrayList<>();
+        for (String line : lines) {
+            if (font.width(line) <= maxWidth) {
+                out.add(line);
+                continue;
+            }
+            StringBuilder cur = new StringBuilder();
+            for (String w : line.split(" ")) {
+                String cand = cur.length() == 0 ? w : cur + " " + w;
+                if (cur.length() > 0 && font.width(cand) > maxWidth) {
+                    out.add(cur.toString());
+                    cur = new StringBuilder(w);
+                } else {
+                    cur = new StringBuilder(cand);
+                }
+            }
+            if (cur.length() > 0) {
+                out.add(cur.toString());
+            }
+        }
+
+        return out.isEmpty() ? List.of(text) : out;
     }
 
     private void renderCursorBar(GuiGraphics var1, int var2, int var3) {
@@ -335,9 +363,9 @@ public class WorldMapScreen extends Screen {
             ),
             var16.stream().mapToInt(var5.font::width).max().orElse(0)
         );
-        int var18 = var17 + 12;
+        int var18 = Math.min(var17 + 12, Math.max(40, this.width - 4));
         int var19 = 30;
-        int var20 = var19 + var16.size() * 14 + 3;
+        int var20 = Math.min(var19 + var16.size() * 14 + 3, Math.max(30, this.height - 4));
         int var21 = (int)Math.min(var1, (double)(this.width - var18 - 2));
         int var22 = (int)Math.min(var3, (double)(this.height - var20 - 2));
         this.menu = new WorldMapScreen.Menu(var21, var22, var18, var20, var12, var14, var13, var16, actions, var15);
@@ -364,7 +392,10 @@ public class WorldMapScreen extends Screen {
         Minecraft var4 = Minecraft.getInstance();
         WorldMapScreen.Menu var5 = this.menu;
         var1.fill(var5.x, var5.y, var5.x + var5.width, var5.y + var5.height, -267119590);
-        var1.renderOutline(var5.x, var5.y, var5.x + var5.width, var5.y + var5.height, -12959930);
+        // NOTE: renderOutline takes (x, y, WIDTH, HEIGHT) in 1.21.1 - passing the
+        // far corner drew giant misplaced rectangles all over the map (the old
+        // "crooked interface" bug)
+        var1.renderOutline(var5.x, var5.y, var5.width, var5.height, -12959930);
         int var6 = var5.y + 3;
         var1.drawString(var4.font, "X: " + var5.blockX + "  Y: " + var5.blockY + "  Z: " + var5.blockZ, var5.x + 6, var6, -1643021, false);
         var6 += 10;
@@ -908,11 +939,14 @@ public class WorldMapScreen extends Screen {
             }
         }
 
-        // 2) stored chunks: the whole explored map from the persistent store
-        if (var5.size() < 512 && MapStore.isEnabled()) {
+        // 2) stored chunks: the whole explored map from the persistent store.
+        // Runs EVEN when the live scan filled its cap - otherwise common biomes
+        // would only ever match near the player (loaded chunks) and the search
+        // would never see the rest of the explored map.
+        if (MapStore.isEnabled()) {
             ClientLevel level = var9;
             MapStore.forEachStoredChunk((pos, palette, cols) -> {
-                if (var5.size() >= 512) {
+                if (var5.size() >= 2048) {
                     return;
                 }
                 int cx = ChunkPos.getX(pos);
@@ -937,6 +971,9 @@ public class WorldMapScreen extends Screen {
         }
 
         var5.sort(Comparator.comparingDouble(this::hitDist2));
+        if (var5.size() > 512) {
+            var5.subList(512, var5.size()).clear();
+        }
         this.searchResults = var5;
         if (var5.isEmpty()) {
             this.searchIndex = 0;

@@ -91,7 +91,7 @@ public final class WorldMarkerOverlay {
         int var6 = (int)Mth.clamp(var3.x, 14.0F, (float)Math.max(var4 - 14, 14));
         int var7 = (int)Mth.clamp(var3.y, 22.0F, (float)Math.max(var5 - 34, 22));
         var0.fill(var6 - 2, var7 - 2, var6 + 3, var7 + 3, var2.colorARGB);
-        var0.renderOutline(var6 - 3, var7 - 3, var6 + 4, var7 + 4, var2.beacon ? -922746881 : -267382764);
+        var0.renderOutline(var6 - 3, var7 - 3, 7, 7, var2.beacon ? -922746881 : -267382764);
         String var8 = (int)Math.round(var3.distance) + "m";
         String var9 = var2.name;
         String var10 = var9 + " " + var8;
