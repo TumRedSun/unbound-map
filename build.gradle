@@ -26,8 +26,15 @@ tasks.withType(JavaCompile).configureEach {
 }
 
 neoForge {
-    // NeoForge version for Minecraft 1.21.1
-    version = project.neo_version
+    enable {
+        // NeoForge version for Minecraft 1.21.1
+        version = project.neo_version
+
+        // Vineflower's decompile pass needs a >4 GB heap; on small CI hosts pass
+        // -Punbound.noRecompile to skip the decompile/recompile round-trip and
+        // compile against the patched binary directly
+        disableRecompilation = providers.gradleProperty('unbound.noRecompile').isPresent()
+    }
 
     runs {
         client {
@@ -43,6 +50,20 @@ neoForge {
         "${project.mod_id}" {
             sourceSet(sourceSets.main)
         }
+    }
+}
+
+// keep neoforge.mods.toml in sync with gradle.properties (the version used to
+// be hardcoded there and silently drifted several releases behind)
+tasks.processResources {
+    var replaceProps = [
+        "mod_version": project.mod_version.toString(),
+        "mod_id"     : project.mod_id.toString(),
+        "mod_name"   : project.mod_name.toString()
+    ]
+    inputs.properties(replaceProps)
+    filesMatching("META-INF/neoforge.mods.toml") {
+        expand(replaceProps)
     }
 }
 

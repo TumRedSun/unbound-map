@@ -24,9 +24,14 @@ import java.util.TreeSet;
 import java.util.zip.GZIPInputStream;
 import java.util.zip.GZIPOutputStream;
 import net.minecraft.client.Minecraft;
+import net.minecraft.core.Registry;
+import net.minecraft.core.registries.Registries;
 import net.minecraft.resources.ResourceKey;
+import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.level.Level;
+import net.minecraft.world.level.biome.Biome;
+import net.minecraft.world.level.material.MapColor;
 import net.unbound.maps.UnboundMapsMod;
 import net.unbound.maps.util.StoragePaths;
 
@@ -36,6 +41,12 @@ import net.unbound.maps.util.StoragePaths;
  * Chunks are packed into 32x32-chunk region files ({@code r.<rx>.<rz>.bin}, gzip-compressed
  * binary: 256 tile colors + 256 surface heights per chunk, v2 also stores the surface biome
  * palette so the biome search works on the WHOLE explored map, not only on loaded chunks).
+ * <p>
+ * Region format v3 marks data captured since 1.11.0. Versions 1/2 are LEGACY: captures before
+ * 1.10.0 painted the block UNDER the surface (dirt under every bare grass column, air under
+ * every tree canopy), and 1.10.0 kept those wrong colors on disk. Legacy chunks are therefore
+ * repaired right in {@link #loadRegion(long)} (see {@link #healLegacyChunk}), so the whole
+ * previously explored map loses the brown/green "white noise" without re-visiting it.
  * Discovered biomes and blocks go into a human-readable {@code discovery.json}. Everything
  * is written lazily: dirty regions are flushed by {@link #saveDirty()} on an autosave timer,
  * on dimension change and on logout.
@@ -239,6 +250,10 @@ public final class MapStore {
         if (var2 == null) {
             var2 = loadRegion(var0);
             REGIONS.put(var0, var2);
+            if (var2.dirty) {
+                // healed legacy data: flush the repair back to disk as v3
+                DIRTY_REGIONS.add(var0);
+            }
             evictRegions();
         }
         return var2;
@@ -274,50 +289,156 @@ public final class MapStore {
         try {
             DataInputStreamLite var3 = new DataInputStreamLite(new BufferedInputStream(new GZIPInputStream(Files.newInputStream(var2)), 65536));
             int var4 = var3.readInt();
-            if (var4 != 1 && var4 != 2) {
+            if (var4 != 1 && var4 != 2 && var4 != 3) {
                 var3.close();
                 return var1;
             }
             boolean var5b = var4 >= 2;
+            // v1/v2 data predates the under-the-surface capture fix - colors need the heal
+            boolean var9 = var4 < 3;
             int var5 = var3.readInt();
             for (int var6 = 0; var6 < var5; var6++) {
                 long var7 = var3.readLong();
-                int[] var9 = new int[256];
-                for (int var10 = 0; var10 < 256; var10++) {
-                    var9[var10] = var3.readInt();
+                int[] var10 = new int[256];
+                for (int var11 = 0; var11 < 256; var11++) {
+                    var10[var11] = var3.readInt();
                 }
-                int[] var11 = new int[256];
-                for (int var12 = 0; var12 < 256; var12++) {
-                    var11[var12] = var3.readShort();
+                int[] var12 = new int[256];
+                for (int var13 = 0; var13 < 256; var13++) {
+                    var12[var13] = var3.readShort();
                 }
-                String[] var14 = null;
-                byte[] var15 = null;
+                String[] var15 = null;
+                byte[] var16 = null;
                 if (var5b) {
                     // v2 stored per-column sky/block light nibbles; they were sampled
                     // with a buggy position (inside the surface block) and are now
                     // ignored - the bytes are still consumed to stay format-compatible
-                    for (int var16 = 0; var16 < 256; var16++) {
+                    for (int var17 = 0; var17 < 256; var17++) {
                         var3.readByte();
                     }
                     if (var3.readByte() != 0) {
-                        int var17 = var3.readByte() & 0xFF;
-                        var14 = new String[var17];
-                        for (int var18 = 0; var18 < var17; var18++) {
-                            var14[var18] = var3.readUtf();
+                        int var18 = var3.readByte() & 0xFF;
+                        var15 = new String[var18];
+                        for (int var19 = 0; var19 < var18; var19++) {
+                            var15[var19] = var3.readUtf();
                         }
-                        var15 = new byte[256];
-                        for (int var19 = 0; var19 < 256; var19++) {
-                            var15[var19] = (byte)var3.readByte();
+                        var16 = new byte[256];
+                        for (int var20 = 0; var20 < 256; var20++) {
+                            var16[var20] = (byte)var3.readByte();
                         }
                     }
                 }
-                var1.chunks.put(var7, new ChunkData(var9, var11, var14, var15));
+                if (var9) {
+                    healLegacyChunk(var7, var10, var12, var15, var16);
+                    var1.dirty = true;
+                }
+                var1.chunks.put(var7, new ChunkData(var10, var12, var15, var16));
             }
             var3.close();
-        } catch (Exception var13) {
-            UnboundMapsMod.LOGGER.warn("Unbound Maps: failed to read map region {}: {}", var2.getFileName(), var13.toString());
+        } catch (Exception var13x) {
+            UnboundMapsMod.LOGGER.warn("Unbound Maps: failed to read map region {}: {}", var2.getFileName(), var13x.toString());
         }
         return var1;
+    }
+
+    /**
+     * Repairs LEGACY (region v1/v2) chunk colors in place, right after they are read
+     * from disk. Old captures painted the block UNDER the WORLD_SURFACE top block, so:
+     * <ul>
+     *   <li>canopy columns (air stored under the top leaf) show as "unknown" holes -
+     *       repaint with the biome foliage green;</li>
+     *   <li>every bare grass column stored the DIRT color of the block below the
+     *       grass block, while plant-top columns stored the grass color - that mix is
+     *       the brown/green "white noise". DIRT columns in a grassy biome are
+     *       therefore re-tinted with the column biome's grass color (exposed dirt
+     *       patches turn green too - the far lesser evil);</li>
+     *   <li>snowy-biome columns stored the green of the grass block under the snow
+     *       layer while fresh captures show the white snow top - repaint the exact
+     *       legacy grass-tinted colors in cold biomes with the snow color.</li>
+     * </ul>
+     * Heights were always stored correctly (the Y of the top surface block), so they
+     * are kept untouched. Healed regions are saved back as v3, making the repair
+     * one-time.
+     */
+    private static void healLegacyChunk(long var0, int[] var2, int[] var3, String[] var4, byte[] var5) {
+        int var6 = MapTileCache.mapColorAbgr(MapColor.DIRT);
+        int var7 = MapTileCache.mapColorAbgr(MapColor.GRASS);
+        int var8 = MapTileCache.mapColorAbgr(MapColor.SNOW);
+        int var9 = (ChunkPos.getX(var0) << 4) + 8;
+        int var10 = (ChunkPos.getZ(var0) << 4) + 8;
+        java.util.List<Biome> var11 = null;
+        if (var4 != null && var5 != null) {
+            // biomes live in the world-loaded registry, not in BuiltInRegistries
+            Registry<Biome> var12 = null;
+            try {
+                Minecraft var13 = Minecraft.getInstance();
+                if (var13 != null && var13.level != null) {
+                    var12 = var13.level.registryAccess().registryOrThrow(Registries.BIOME);
+                }
+            } catch (Exception var14) {
+                var12 = null;
+            }
+
+            var11 = new java.util.ArrayList<>(var4.length);
+            for (String var15 : var4) {
+                Biome var16 = null;
+                try {
+                    if (var12 != null) {
+                        var16 = var12.getOptional(ResourceLocation.parse(var15)).orElse(null);
+                    }
+                } catch (Exception var17) {
+                    var16 = null;
+                }
+                var11.add(var16);
+            }
+        }
+
+        for (int var16 = 0; var16 < 256; var16++) {
+            int var17 = var2[var16];
+            if (var17 == var6) {
+                // dirt under a bare grass block (or under paths/podzol) - repaint as
+                // the biome's grass, or as snow when the biome is cold enough that the
+                // real surface is snow-covered
+                Biome var18 = biomeAt(var11, var5, var16);
+                if (var18 == null) {
+                    var2[var16] = MapTileCache.tintAbgr(var7, 0x91BD59);
+                } else if (var18.getBaseTemperature() < 0.15F) {
+                    var2[var16] = var8;
+                } else {
+                    int var19 = (var16 & 15) - 8;
+                    int var20 = (var16 >> 4) - 8;
+                    var2[var16] = MapTileCache.tintAbgr(var7, var18.getGrassColor((double)(var9 + var19), (double)(var10 + var20)));
+                }
+            } else if (var17 == MapTileCache.UNKNOWN) {
+                // air stored under the top leaf: a tree canopy - foliage green
+                Biome var18 = biomeAt(var11, var5, var16);
+                int var21 = var18 != null ? var18.getFoliageColor() : 0x48B518;
+                var2[var16] = MapTileCache.shadeAbgr(MapTileCache.tintAbgr(var7, var21), 0.88F);
+            } else if (var11 != null) {
+                // exact legacy grass tint in a cold biome = the grass block under a
+                // snow layer - fresh captures show white, so repaint to match
+                Biome var18 = biomeAt(var11, var5, var16);
+                if (var18 != null && var18.getBaseTemperature() < 0.15F) {
+                    int var19 = (var16 & 15) - 8;
+                    int var20 = (var16 >> 4) - 8;
+                    int var22 = MapTileCache.tintAbgr(var7, var18.getGrassColor((double)(var9 + var19), (double)(var10 + var20)));
+                    if (var17 == var22) {
+                        var2[var16] = var8;
+                    }
+                }
+            }
+        }
+    }
+
+    private static Biome biomeAt(java.util.List<Biome> var0, byte[] var1, int var2) {
+        if (var0 == null || var1 == null) {
+            return null;
+        }
+        int var3 = var1[var2] & 0xFF;
+        if (var3 == 0xFF || var3 >= var0.size()) {
+            return null;
+        }
+        return var0.get(var3);
     }
 
     private static void saveRegion(long var0, Region var1) {
@@ -331,7 +452,7 @@ public final class MapStore {
             DataOutputStreamLite var4 = new DataOutputStreamLite(
                 new BufferedOutputStream(new GZIPOutputStream(Files.newOutputStream(var3)), 65536)
             );
-            var4.writeInt(2);
+            var4.writeInt(3);
             var4.writeInt(var1.chunks.size());
             for (Map.Entry<Long, ChunkData> var6 : var1.chunks.entrySet()) {
                 ChunkData var7 = (ChunkData)var6.getValue();

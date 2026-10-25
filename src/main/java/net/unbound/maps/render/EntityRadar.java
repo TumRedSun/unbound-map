@@ -53,15 +53,16 @@ import org.joml.Matrix4f;
 public final class EntityRadar {
     private static final int ICON = 9;
     private static final int EDGE_MARGIN = 4;
-    /** face pixel rect (u, v, w, h) inside the entity texture, per entity type - FALLBACK ONLY. */
+    /** face pixel rect (u, v, w, h) inside the entity texture, per entity type - VERIFIED against the 1.21.1 models/textures. */
     private static final Map<EntityType<?>, int[]> FACES = buildFaces();
-    /** static per-type rects that beat the model derivation (see {@link #buildOverrides()}). */
+    /** static per-type rects (verified layouts that need a hand-picked band). */
     private static final Map<EntityType<?>, int[]> OVERRIDES = buildOverrides();
-    /** face rect derived from the live entity model, normalized 0..1 (u0, v0, u1, v1); NULL_FACE = none. */
-    private static final Map<EntityType<?>, float[]> MODEL_FACES = new HashMap<>();
+    /** face rect derived from the live entity model (u0, v0, u1, v1 - normalized OR pixel units, see deriveValidatedRect); NULL_FACE = none. */
     private static final float[] NULL_FACE = new float[0];
+    /** validated pixel rects derived from the live model (empty array = known-unusable). */
+    private static final Map<EntityType<?>, int[]> MODEL_RECTS = new HashMap<>();
     /** source texture -> cropped icon texture (null value = crop failed, use the name). */
-    private static final Map<ResourceLocation, ResourceLocation> ICONS = new HashMap<>();
+    private static final Map<String, ResourceLocation> ICONS = new HashMap<>();
     /** texture -> cached pixel size (the old code decoded the whole PNG on every icon draw). */
     private static final Map<ResourceLocation, int[]> TEXTURE_SIZES = new HashMap<>();
     // reflection handles into the baked model parts. ModelPart.cubes/children and
@@ -97,10 +98,13 @@ public final class EntityRadar {
     }
 
     /**
-     * Head face rects from the vanilla model boxes - only used as a fallback when
-     * the live model could not be inspected. A box at texture (u,v) with depth d has
-     * its front face at (u+d, v+d): humanoid 8x8x8 heads at (8,8), pig 8x8x8 at
+     * Head face rects from the vanilla model boxes - verified against the real
+     * 1.21.1 models and textures. A box at texture (u,v) with depth d has its
+     * front face at (u+d, v+d): humanoid 8x8x8 heads at (8,8), pig 8x8x8 at
      * (8,8), cow 8x8x6 at (6,6), sheep 6x6x8 at (8,8), wolf 6x6x4 at (4,4).
+     * These verified rects take PRIORITY over the live-model derivation: the
+     * model path already produced two regressions (it measured the horse's
+     * featureless muzzle bridge and mishandled the pig's pixel-based UVs).
      */
     private static Map<EntityType<?>, int[]> buildFaces() {
         Map<EntityType<?>, int[]> var0 = new HashMap<>();
@@ -137,10 +141,12 @@ public final class EntityRadar {
     }
 
     /**
-     * Static rects that BEAT the live model derivation: the horse family's head
-     * part front face is only the featureless 6x5 muzzle bridge, while the real
-     * face with both eyes spans the whole head band at (0,20)-(20,25) of the
-     * 64x64 horse/donkey/mule textures (same layout for every variant).
+     * Hand-picked rect for the horse family: the horse head box's front face is
+     * only the 6x5 muzzle bridge - both EYES sit on the side faces, so the real
+     * face with both eyes spans the whole head band (0,20)-(20,25) of the 64x64
+     * horse/donkey/mule textures (verified: white eye pixels at (3,21)/(16,21);
+     * same layout for every variant). The band is drawn aspect-fitted, not
+     * squashed into a square.
      */
     private static Map<EntityType<?>, int[]> buildOverrides() {
         Map<EntityType<?>, int[]> var0 = new HashMap<>();
@@ -267,15 +273,25 @@ public final class EntityRadar {
             RenderSystem.setShaderColor(1.0F, 1.0F, 1.0F, 0.6F);
         }
 
+        // aspect-fit the face inside the icon box: crops like the horse's 20x5
+        // head band (eyes on the SIDE faces of the head) used to be squashed
+        // into a 9x9 square that looked like a featureless placeholder blob
         float var15 = var4 - (float)ICON / 2.0F;
         float var16 = var5 - (float)ICON / 2.0F;
         if (var7 != null) {
-            DrawHelper.coloredQuad(var1, var15 - 1.0F, var16 - 1.0F, var15 + (float)ICON + 1.0F, var16 + (float)ICON + 1.0F, -872415232);
-            blitIcon(var1, var7, var15, var16, (float)ICON, (float)ICON);
+            int[] dims = iconDims(var2, var7);
+            float[] fit = fitDims((float)dims[0], (float)dims[1]);
+            float fx = var15 + ((float)ICON - fit[0]) / 2.0F;
+            float fy = var16 + ((float)ICON - fit[1]) / 2.0F;
+            DrawHelper.coloredQuad(var1, fx - 1.0F, fy - 1.0F, fx + fit[0] + 1.0F, fy + fit[1] + 1.0F, -872415232);
+            blitIcon(var1, var7, fx, fy, fit[0], fit[1]);
         } else if (var8 != null && rect != null) {
-            DrawHelper.coloredQuad(var1, var15 - 1.0F, var16 - 1.0F, var15 + (float)ICON + 1.0F, var16 + (float)ICON + 1.0F, -872415232);
+            float[] fit = fitDims((float)rect[2], (float)rect[3]);
+            float fx = var15 + ((float)ICON - fit[0]) / 2.0F;
+            float fy = var16 + ((float)ICON - fit[1]) / 2.0F;
+            DrawHelper.coloredQuad(var1, fx - 1.0F, fy - 1.0F, fx + fit[0] + 1.0F, fy + fit[1] + 1.0F, -872415232);
             int[] dims = textureSize(var2, var8);
-            blitFace(var1, var8, var15, var16, (float)ICON, (float)ICON, (float)rect[0], (float)rect[1], (float)rect[2], (float)rect[3], (float)dims[0], (float)dims[1]);
+            blitFace(var1, var8, fx, fy, fit[0], fit[1], (float)rect[0], (float)rect[1], (float)rect[2], (float)rect[3], (float)dims[0], (float)dims[1]);
         } else {
             // plain colored dot, no bulky dark box around it
             drawDot(var0, var1, var4, var5, dotColor(var3));
@@ -339,52 +355,159 @@ public final class EntityRadar {
     }
 
     /**
-     * Face pixel rect {x, y, w, h} for a mob: read from the LIVE entity model's
-     * 'head' part (works for every vanilla and modded model that keeps its cubes
-     * under a head part, regardless of texture size), falling back to the static
-     * per-type table for exotic layouts.
+     * Face pixel rect {x, y, w, h} for a mob. Order of preference:
+     * 1. the verified static table (exact 1.21.1 vanilla layouts);
+     * 2. the LIVE entity model's 'head' part, converted to pixels with AUTO
+     *    unit detection (Vertex.u/v may be normalized or raw pixels depending on
+     *    the model) and validated against the actual texture pixels - a crop that
+     *    is mostly transparent or nearly one flat color (muzzle bridge, back of
+     *    the head) is rejected, so modded mobs can never get a "blank square"
+     *    icon either.
      */
     private static int[] faceRect(Minecraft var0, Entity var1) {
-        // 1) static override (horse family head band with both eyes)
         int[] var11 = OVERRIDES.get(var1.getType());
+        if (var11 == null) {
+            var11 = FACES.get(var1.getType());
+        }
+
         if (var11 != null) {
             int[] var12 = resolveRect(var0, var1, var11);
             if (var12 != null) {
                 return var12;
             }
+
+            // the static rect did not fit this texture (mod re-texture) - fall
+            // through to the live model instead of dropping the icon entirely
         }
 
-        float[] var2 = MODEL_FACES.get(var1.getType());
-        if (var2 == null) {
-            var2 = deriveFace(var0, var1);
-            if (MODEL_FACES.size() > 512) {
-                MODEL_FACES.clear();
-            }
-            MODEL_FACES.put(var1.getType(), var2);
+        int[] var2 = MODEL_RECTS.get(var1.getType());
+        if (var2 != null) {
+            return var2.length == 4 ? var2 : null;
         }
 
-        if (var2.length == 4) {
-            ResourceLocation var3;
-            try {
-                var3 = ((EntityRenderer)var0.getEntityRenderDispatcher().getRenderer(var1)).getTextureLocation(var1);
-            } catch (Exception var4) {
-                return null;
-            }
-
-            int[] var5 = textureSize(var0, var3);
-            int var6 = Mth.clamp(Math.round(var2[0] * var5[0]), 0, var5[0] - 1);
-            int var7 = Mth.clamp(Math.round(var2[1] * var5[1]), 0, var5[1] - 1);
-            int var8 = Mth.clamp(Math.round((var2[2] - var2[0]) * var5[0]), 1, var5[0] - var6);
-            int var9 = Mth.clamp(Math.round((var2[3] - var2[1]) * var5[1]), 1, var5[1] - var7);
-            return new int[]{var6, var7, var8, var9};
+        int[] var3 = deriveValidatedRect(var0, var1);
+        if (MODEL_RECTS.size() > 512) {
+            MODEL_RECTS.clear();
         }
 
-        int[] var10 = FACES.get(var1.getType());
-        if (var10 == null) {
+        MODEL_RECTS.put(var1.getType(), var3 == null ? new int[0] : var3);
+        return var3;
+    }
+
+    /**
+     * Derives the face rect from the live model and picks the best crop. The
+     * model reports the head's front-face UVs as {u0, v0, u1, v1}; depending on
+     * the version/model the values are normalized (0..1) or raw texture pixels,
+     * so BOTH readings are scored against the real texture pixels (transparency
+     * + color variance) and the better one wins.
+     */
+    private static int[] deriveValidatedRect(Minecraft var0, Entity var1) {
+        float[] var2 = deriveFace(var0, var1);
+        if (var2 == null || var2.length != 4) {
             return null;
         }
 
-        return resolveRect(var0, var1, var10);
+        ResourceLocation var3;
+        try {
+            var3 = ((EntityRenderer)var0.getEntityRenderDispatcher().getRenderer(var1)).getTextureLocation(var1);
+        } catch (Exception var4) {
+            return null;
+        }
+
+        int[] var5 = textureSize(var0, var3);
+        int[] var6 = toPixelRect(var2, true, var5);
+        int[] var7 = toPixelRect(var2, false, var5);
+        double var8 = scoreCrop(var0, var3, var6);
+        double var9 = scoreCrop(var0, var3, var7);
+        if (var8 <= 0.0D && var9 <= 0.0D) {
+            return null;
+        }
+
+        return var8 >= var9 ? var6 : var7;
+    }
+
+    /** Converts a model UV rect into pixels, as normalized or as raw pixel values. */
+    private static int[] toPixelRect(float[] var0, boolean var1, int[] var2) {
+        float var3 = var0[0];
+        float var4 = var0[1];
+        float var5 = var0[2];
+        float var6 = var0[3];
+        if (var1) {
+            var3 *= (float)var2[0];
+            var5 *= (float)var2[0];
+            var4 *= (float)var2[1];
+            var6 *= (float)var2[1];
+        }
+
+        int var7 = Mth.clamp(Math.round(var3), 0, var2[0] - 1);
+        int var8 = Mth.clamp(Math.round(var4), 0, var2[1] - 1);
+        int var9 = Mth.clamp(Math.round(var5 - var3), 1, var2[0] - var7);
+        int var10 = Mth.clamp(Math.round(var6 - var4), 1, var2[1] - var8);
+        return new int[]{var7, var8, var9, var10};
+    }
+
+    /**
+     * Quality of a candidate crop, sampled from the actual texture pixels:
+     * rejects crops that are mostly transparent (>40%) or nearly uniform
+     * (channel stdev sum < 12 - a featureless muzzle/back-of-head), otherwise
+     * returns variance x opaque ratio (higher = more face-like).
+     */
+    private static double scoreCrop(Minecraft var0, ResourceLocation var1, int[] var2) {
+        NativeImage var3 = decodedTexture(var0, var1);
+        if (var3 == null) {
+            return -1.0D;
+        }
+
+        int var4 = var2[0];
+        int var5 = var2[1];
+        int var6 = var2[2];
+        int var7 = var2[3];
+        int var8 = Math.max(1, var6 / 16);
+        int var9 = Math.max(1, var7 / 16);
+        int var10 = 0;
+        int var11 = 0;
+        double var12 = 0.0D;
+        double var13 = 0.0D;
+        double var14 = 0.0D;
+        double var15 = 0.0D;
+
+        for (int var16 = var5; var16 < var5 + var7; var16 += var9) {
+            for (int var17 = var4; var17 < var4 + var6; var17 += var8) {
+                int var18 = var3.getPixelRGBA(var17, var16);
+                if (var18 >>> 24 < 32) {
+                    var11++;
+                } else {
+                    var10++;
+                    double var19 = (double)(var18 & 0xFF);
+                    double var20 = (double)(var18 >>> 8 & 0xFF);
+                    double var21 = (double)(var18 >>> 16 & 0xFF);
+                    var12 += var19;
+                    var13 += var20;
+                    var14 += var21;
+                    var15 += var19 * var19 + var20 * var20 + var21 * var21;
+                }
+            }
+        }
+
+        if (var10 == 0) {
+            return -1.0D;
+        }
+
+        double var22 = (double)var10 / (double)(var10 + var11);
+        if (var22 < 0.6D) {
+            return -1.0D;
+        }
+
+        double var23 = var12 / (double)var10;
+        double var24 = var13 / (double)var10;
+        double var25 = var14 / (double)var10;
+        double var26 = Math.max(0.0D, var15 / (double)var10 - var23 * var23 - var24 * var24 - var25 * var25);
+        double var27 = Math.sqrt(var26 / 3.0D);
+        if (var27 < 12.0D) {
+            return -1.0D;
+        }
+
+        return var27 * var22;
     }
 
     /** Clamps a static pixel rect against the entity's texture size. */
@@ -403,9 +526,10 @@ public final class EntityRadar {
     }
 
     /**
-     * Reads the front (north) face of the model's head part and returns its
-     * texture UVs normalized to 0..1: {u0, v0, u1, v1}. NULL_FACE when the model
-     * has no inspectable head.
+     * Reads the front face of the model's head part and returns its texture UVs
+     * as {u0, v0, u1, v1} (units NOT guaranteed - the caller auto-detects whether
+     * they are normalized or raw pixels). NULL_FACE when the model has no
+     * inspectable head.
      */
     private static float[] deriveFace(Minecraft var0, Entity var1) {
         try {
@@ -617,58 +741,39 @@ public final class EntityRadar {
      * tiny DynamicTexture. The PNG is read from the resource manager; when the
      * texture only exists in the texture manager (downloaded skins), its
      * DynamicTexture pixels are copied instead. A failed crop is remembered and
-     * the caller falls back to a direct UV blit or the mob name.
+     * the caller falls back to a direct UV blit or the mob name. The cache key
+     * includes the rect: two mob types sharing one texture with different faces
+     * must not steal each other's crop.
      */
     private static ResourceLocation faceIcon(Minecraft var0, ResourceLocation var1, int var2, int var3, int var4, int var5) {
-        if (ICONS.containsKey(var1)) {
-            return ICONS.get(var1);
+        String key = var1 + "#" + var2 + "," + var3 + "," + var4 + "," + var5;
+        if (ICONS.containsKey(key)) {
+            return ICONS.get(key);
         }
 
         ResourceLocation var6 = null;
         try {
-            NativeImage var7 = null;
-            Optional<net.minecraft.server.packs.resources.Resource> var8 = var0.getResourceManager().getResource(var1);
-            if (var8.isPresent()) {
-                try (InputStream var9 = var8.get().open()) {
-                    var7 = NativeImage.read(var9);
-                }
-            } else {
-                net.minecraft.client.renderer.texture.AbstractTexture var10 = var0.getTextureManager().getTexture(var1);
-                if (var10 instanceof DynamicTexture var11 && var11.getPixels() != null) {
-                    NativeImage var12 = var11.getPixels();
-                    var7 = new NativeImage(NativeImage.Format.RGBA, var12.getWidth(), var12.getHeight(), false);
-
-                    for (int var13 = 0; var13 < var12.getHeight(); var13++) {
-                        for (int var14 = 0; var14 < var12.getWidth(); var14++) {
-                            var7.setPixelRGBA(var14, var13, var12.getPixelRGBA(var14, var13));
-                        }
-                    }
-                }
-            }
+            NativeImage var7 = decodedTexture(var0, var1);
 
             if (var7 != null) {
-                try {
-                    int var15 = var7.getWidth();
-                    int var16 = var7.getHeight();
-                    int var17 = Mth.clamp(var2, 0, var15 - 1);
-                    int var18 = Mth.clamp(var3, 0, var16 - 1);
-                    int var19 = Math.min(var4, var15 - var17);
-                    int var20 = Math.min(var5, var16 - var18);
-                    if (var19 > 0 && var20 > 0) {
-                        NativeImage var21 = new NativeImage(NativeImage.Format.RGBA, var19, var20, false);
+                int var15 = var7.getWidth();
+                int var16 = var7.getHeight();
+                int var17 = Mth.clamp(var2, 0, var15 - 1);
+                int var18 = Mth.clamp(var3, 0, var16 - 1);
+                int var19 = Math.min(var4, var15 - var17);
+                int var20 = Math.min(var5, var16 - var18);
+                if (var19 > 0 && var20 > 0) {
+                    NativeImage var21 = new NativeImage(NativeImage.Format.RGBA, var19, var20, false);
 
-                        for (int var22 = 0; var22 < var20; var22++) {
-                            for (int var23 = 0; var23 < var19; var23++) {
-                                var21.setPixelRGBA(var23, var22, var7.getPixelRGBA(var17 + var23, var18 + var22));
-                            }
+                    for (int var22 = 0; var22 < var20; var22++) {
+                        for (int var23 = 0; var23 < var19; var23++) {
+                            var21.setPixelRGBA(var23, var22, var7.getPixelRGBA(var17 + var23, var18 + var22));
                         }
-
-                        ResourceLocation var24 = UnboundMapsMod.id("radar_icon_" + iconSeq++);
-                        var0.getTextureManager().register(var24, new DynamicTexture(var21));
-                        var6 = var24;
                     }
-                } finally {
-                    var7.close();
+
+                    ResourceLocation var24 = UnboundMapsMod.id("radar_icon_" + iconSeq++);
+                    var0.getTextureManager().register(var24, new DynamicTexture(var21));
+                    var6 = var24;
                 }
             }
         } catch (Throwable var25) {
@@ -679,8 +784,83 @@ public final class EntityRadar {
             ICONS.clear();
         }
 
-        ICONS.put(var1, var6);
+        ICONS.put(key, var6);
         return var6;
+    }
+
+    /** Pixel size of a cropped icon texture (for aspect-fit drawing). */
+    private static int[] iconDims(Minecraft var0, ResourceLocation var1) {
+        try {
+            net.minecraft.client.renderer.texture.AbstractTexture var2 = var0.getTextureManager().getTexture(var1);
+            if (var2 instanceof DynamicTexture var3 && var3.getPixels() != null) {
+                return new int[]{var3.getPixels().getWidth(), var3.getPixels().getHeight()};
+            }
+        } catch (Throwable var4) {
+        }
+
+        return new int[]{ICON, ICON};
+    }
+
+    /**
+     * Fits a crop of the given pixel size into the ICON box, preserving the
+     * aspect ratio (clamped to 1:3..3:1 and never below 3 px on the short side,
+     * so very wide face bands stay visible).
+     */
+    private static float[] fitDims(float var0, float var1) {
+        float var2 = var0 / Math.max(1.0F, var1);
+        var2 = Mth.clamp(var2, 1.0F / 3.0F, 3.0F);
+        float var3;
+        float var4;
+        if (var2 >= 1.0F) {
+            var3 = (float)ICON;
+            var4 = Math.max(3.0F, (float)ICON / var2);
+        } else {
+            var4 = (float)ICON;
+            var3 = Math.max(3.0F, (float)ICON * var2);
+        }
+
+        return new float[]{var3, var4};
+    }
+
+    /** Decoded entity textures, shared by the crop scorer and the icon cropper. */
+    private static final Map<ResourceLocation, NativeImage> DECODED = new HashMap<>();
+
+    private static NativeImage decodedTexture(Minecraft var0, ResourceLocation var1) {
+        NativeImage var2 = DECODED.get(var1);
+        if (var2 != null) {
+            return var2;
+        }
+
+        try {
+            Optional<net.minecraft.server.packs.resources.Resource> var3 = var0.getResourceManager().getResource(var1);
+            if (var3.isPresent()) {
+                try (InputStream var4 = var3.get().open()) {
+                    var2 = NativeImage.read(var4);
+                }
+            } else {
+                net.minecraft.client.renderer.texture.AbstractTexture var5 = var0.getTextureManager().getTexture(var1);
+                if (var5 instanceof DynamicTexture var6 && var6.getPixels() != null) {
+                    NativeImage var7 = var6.getPixels();
+                    var2 = new NativeImage(NativeImage.Format.RGBA, var7.getWidth(), var7.getHeight(), false);
+
+                    for (int var8 = 0; var8 < var7.getHeight(); var8++) {
+                        for (int var9 = 0; var9 < var7.getWidth(); var9++) {
+                            var2.setPixelRGBA(var9, var8, var7.getPixelRGBA(var9, var8));
+                        }
+                    }
+                }
+            }
+        } catch (Throwable var10) {
+            return null;
+        }
+
+        if (DECODED.size() > 96) {
+            var2 = null;
+        } else {
+            DECODED.put(var1, var2);
+        }
+
+        return var2;
     }
 
     /** Draws a cropped icon texture (full 0..1 UV). */

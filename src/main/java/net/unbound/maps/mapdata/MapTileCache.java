@@ -12,9 +12,11 @@ import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.tags.BlockTags;
 import net.minecraft.util.Mth;
 import net.minecraft.world.level.ChunkPos;
+import net.minecraft.world.level.Level;
 import net.minecraft.world.level.chunk.ChunkAccess;
 import net.minecraft.world.level.LightLayer;
 import net.minecraft.world.level.biome.Biome;
+import net.minecraft.world.level.block.DropExperienceBlock;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.chunk.status.ChunkStatus;
 import net.minecraft.world.level.levelgen.Heightmap.Types;
@@ -389,36 +391,12 @@ public final class MapTileCache {
             if (MapStore.isEnabled()) {
                 MapStore.StoredChunk var7 = MapStore.storedChunk(var0.dimension(), var4);
                 if (var7 != null) {
-                    int[] var8 = var7.colors();
-                    // Legacy repair: chunks explored before 1.10.0 painted the block
-                    // UNDER the surface, so every tree canopy (air under the top leaf)
-                    // was stored as UNKNOWN and showed as black blobs on the map.
-                    // Those columns are certainly tree tops - render the default
-                    // foliage green instead of the "unknown" hole. The stored array
-                    // is shared with the region cache, so repair on a CLONE only.
-                    if (var8 != null) {
-                        int[] var9 = var8;
-                        boolean var10 = false;
-                        for (int var11 = 0; var11 < 256; var11++) {
-                            if (var9[var11] == -15723752
-                                && var7.heights() != null
-                                && var7.heights()[var11] != Integer.MIN_VALUE) {
-                                if (!var10) {
-                                    var9 = var8.clone();
-                                    var10 = true;
-                                }
-
-                                var9[var11] = tintAbgr(mapColorAbgr(MapColor.PLANT), 0x48B518);
-                            }
-                        }
-
-                        var8 = var9;
-                    }
-
-                    // stored light nibbles (v2 format) were captured with the old buggy
+                    // legacy (pre-1.11.0) region data is repaired by MapStore.loadRegion
+                    // right when it is read, so stored colors are safe to render as-is.
+                    // Stored light nibbles (v2 format) were captured with the old buggy
                     // sampling and are intentionally ignored: surface tiles are full-bright
                     return new MapTileCache.Entry(
-                        var8, var7.heights() == null ? defaultHeights() : var7.heights(), true, true
+                        var7.colors(), var7.heights() == null ? defaultHeights() : var7.heights(), true, true
                     );
                 }
             }
@@ -460,7 +438,13 @@ public final class MapTileCache {
                                 if (var18 == MapColor.WATER) {
                                     var19 = abgrFromRgb(var21.getWaterColor());
                                 } else if (var17.is(BlockTags.LEAVES)) {
-                                    var19 = tintAbgr(var19, var21.getFoliageColor());
+                                    // Xaero-like readable foliage: tinting the PLANT map
+                                    // color (zero R/B channels) produced a near-black
+                                    // (0,90,0) that made every forest look burned. The
+                                    // GRASS base keeps R/B, the biome foliage tint decides
+                                    // the hue, and a slight darkening keeps canopies
+                                    // distinct from the grass floor without going black.
+                                    var19 = shadeAbgr(tintAbgr(mapColorAbgr(MapColor.GRASS), var21.getFoliageColor()), 0.88F);
                                 } else if (var18 == MapColor.GRASS || var18 == MapColor.PLANT) {
                                     // Xaero-like uniform grass: plant blocks (short/tall
                                     // grass, ferns, crops...) keep the PLANT map color whose
@@ -503,6 +487,14 @@ public final class MapTileCache {
 
             if (var3 && var31) {
                 recordToStore(var0, var1, var2, var4, var34);
+            }
+
+            if (var3) {
+                // the neighbors may have been shaded while this chunk did not exist
+                // yet (their border columns fell back to their own height). Re-shade
+                // them once so slopes continue smoothly across the border - the old
+                // clamped sampling burned permanent "chunk lines" into both maps.
+                markNeighborsForReshade(var1, var2);
             }
 
             return var34;
@@ -570,11 +562,12 @@ public final class MapTileCache {
 
     /**
      * Hillshade: darkens slopes facing away, brightens slopes facing the light.
-     * Deterministic per chunk: samples NEVER cross the chunk border, so a chunk
-     * shades identically no matter which neighbor was scanned first. The old
-     * cross-chunk reads depended on scan order (border columns shaded before the
-     * neighbor existed used a different fallback) and burned permanent "chunk
-     * lines" into both maps.
+     * Deterministic AND seamless: border columns sample the REAL height of the
+     * adjacent chunk (from its cached tile or, if it is loaded but not yet
+     * computed, straight from its heightmap). Heights never depend on the scan
+     * order, so a chunk shades identically no matter when it is drawn; the old
+     * clamped-to-own-border sampling left every border column unshaded and
+     * burned visible chunk grid lines into hillsides.
      */
     private static void shadeEntry(ClientLevel var0, int var1, int var2, MapTileCache.Entry var3) {
         if (var3.shaded) {
@@ -582,22 +575,30 @@ public final class MapTileCache {
         }
         boolean var4 = flag(UnboundConfig.TERRAIN_SHADING, true);
         if (var4) {
+            if (var3.base == null) {
+                var3.base = var3.colors.clone();
+            }
+
             for (int var9 = 0; var9 < 16; var9++) {
                 for (int var10 = 0; var10 < 16; var10++) {
                     int var11 = var9 << 4 | var10;
-                    if (var3.colors[var11] != -15723752) {
+                    if (var3.base[var11] != -15723752) {
                         int var12 = var3.heights[var11];
-                        int var13 = heightAt(var3, var10 - 1, var9 - 1, var12);
+                        int var13 = crossBorderHeight(var0, var1, var2, var10 - 1, var9 - 1, var12, var3);
                         float var14 = Mth.clamp(1.0F + (float)(var12 - var13) * 0.06F, 0.82F, 1.18F);
-                        int var15 = heightAt(var3, var10 + 1, var9, var12);
-                        int var16 = heightAt(var3, var10, var9 + 1, var12);
+                        int var15 = crossBorderHeight(var0, var1, var2, var10 + 1, var9, var12, var3);
+                        int var16 = crossBorderHeight(var0, var1, var2, var10, var9 + 1, var12, var3);
                         if (Math.abs(var12 - var15) >= 4 || Math.abs(var12 - var16) >= 4) {
                             var14 *= 0.94F;
                         }
 
                         if (var14 != 1.0F) {
-                            var3.colors[var11] = shadeAbgr(var3.colors[var11], var14);
+                            var3.colors[var11] = shadeAbgr(var3.base[var11], var14);
+                        } else {
+                            var3.colors[var11] = var3.base[var11];
                         }
+                    } else {
+                        var3.colors[var11] = -15723752;
                     }
                 }
             }
@@ -606,12 +607,57 @@ public final class MapTileCache {
         var3.shaded = true;
     }
 
-    /** Height of a local column (lx, lz clamped to 0..15 - never crosses the chunk). */
-    private static int heightAt(MapTileCache.Entry var0, int var3, int var4, int var5) {
-        int var6 = Mth.clamp(var3, 0, 15);
-        int var7 = Mth.clamp(var4, 0, 15);
-        int var8 = var0.heights[var7 << 4 | var6];
-        return var8 != Integer.MIN_VALUE ? var8 : var5;
+    /** Marks the four direct neighbors for one re-shade now that this chunk exists. */
+    private static void markNeighborsForReshade(int var0, int var1) {
+        int[][] var2 = new int[][]{{-1, 0}, {1, 0}, {0, -1}, {0, 1}};
+
+        for (int[] var6 : var2) {
+            int var7 = var0 + var6[0];
+            int var8 = var1 + var6[1];
+            long var9 = ChunkPos.asLong(var7, var8);
+            MapTileCache.Entry var10 = CHUNKS.get(var9);
+            // stored entries keep their on-disk (already shaded) colors - re-running
+            // the shade pass on them would darken them a second time
+            if (var10 != null && var10.shaded && !var10.stored && var10.base != null) {
+                var10.shaded = false;
+                System.arraycopy(var10.base, 0, var10.colors, 0, 256);
+                MinimapTexture.markChunkDirty(var9);
+                WorldMapCells.markChunkDirty(var9);
+            }
+        }
+    }
+
+    /**
+     * Height of a local column; (lx, lz) may leave 0..15 by ONE block into the
+     * direct neighbor chunk. Falls back to the chunk's cached tile, then to the
+     * live neighbor heightmap, then to the own height (never triggers neighbor
+     * tile computation, so shading stays cheap and non-recursive).
+     */
+    private static int crossBorderHeight(ClientLevel var0, int var1, int var2, int var3, int var4, int var5, MapTileCache.Entry var6) {
+        int var7 = Mth.clamp(var3, -1, 16);
+        int var8 = Mth.clamp(var4, -1, 16);
+        if (var7 >= 0 && var7 < 16 && var8 >= 0 && var8 < 16) {
+            int var9 = var6.heights[var8 << 4 | var7];
+            return var9 != Integer.MIN_VALUE ? var9 : var5;
+        }
+
+        int var10 = var1 + (var7 >> 4);
+        int var11 = var2 + (var8 >> 4);
+        int var12 = var7 & 15;
+        int var13 = var8 & 15;
+        MapTileCache.Entry var14 = CHUNKS.get(ChunkPos.asLong(var10, var11));
+        if (var14 != null) {
+            int var15 = var14.heights[var13 << 4 | var12];
+            return var15 != Integer.MIN_VALUE ? var15 : var5;
+        }
+
+        ChunkAccess var16 = var0.getChunk(var10, var11, ChunkStatus.FULL, false);
+        if (var16 != null) {
+            int var17 = var16.getHeight(Types.WORLD_SURFACE, var12, var13);
+            return var17 != Integer.MIN_VALUE ? var17 : var5;
+        }
+
+        return var5;
     }
 
     public static int getSliceColor(ClientLevel var0, int var1, int var2, int var3) {
@@ -674,15 +720,22 @@ public final class MapTileCache {
                     var13.set(var11 + var14, var30, var12 + var15);
                     BlockState var31 = var4.getBlockState(var13);
                     if (!var31.isAir()) {
-                        // solid at the cut level: render the block itself, full-bright
+                        // solid at the cut level: uniform BRIGHT rock so the cut plane
+                        // reads as solid ground. The 1.10.0 version rendered the raw map
+                        // color of the block AT the cut - deepslate/sculk/tuff are all
+                        // near-black map colors, so "full-bright rock" rendered almost
+                        // black and the deep dark was an unreadable colorful mush.
                         var9[var16] = var30;
-                        int var32 = mapColorAbgr(var31.getMapColor(var4, var13));
+                        MapColor var41 = var31.getMapColor(var4, var13);
+                        int var32 = mapColorAbgr(var41);
                         if (!var31.getFluidState().isEmpty()) {
                             if (var31.getFluidState().is(net.minecraft.tags.FluidTags.LAVA)) {
                                 var32 = lavaColor(var32);
                             } else {
                                 var32 = shadeAbgr(var32, 0.85F);
                             }
+                        } else {
+                            var32 = sliceBlockColor(var31, var41, var0, var30);
                         }
 
                         var10[var16] = var32;
@@ -695,10 +748,10 @@ public final class MapTileCache {
                         } else {
                             var13.set(var11 + var14, var33, var12 + var15);
                             BlockState var34 = var4.getBlockState(var13);
-                            int var35 = mapColorAbgr(var34.getMapColor(var4, var13));
+                            int var35 = sliceBlockColor(var34, var34.getMapColor(var4, var13), var0, var33);
                             if (!var34.getFluidState().isEmpty()) {
                                 if (var34.getFluidState().is(net.minecraft.tags.FluidTags.LAVA)) {
-                                    var35 = lavaColor(var35);
+                                    var35 = lavaColor(mapColorAbgr(var34.getMapColor(var4, var13)));
                                 } else {
                                     int var36 = 0;
 
@@ -739,6 +792,40 @@ public final class MapTileCache {
     }
 
     /**
+     * Cut-lid rock classification: stone-family blocks (stone, deepslate, tuff,
+     * gravel - everything with the stone/deepslate map color) render as ONE
+     * uniform, bright tone per depth class, so tunnels and galleries read as
+     * clean dark shapes against solid ground. Ores keep their sparkle, fluids
+     * and everything else (dirt patches, moss, sculk) keep their identity. The
+     * raw map colors made every underground block a different shade of dark
+     * grey - the "cave mode is an unreadable mess" report in a nutshell.
+     */
+    private static int sliceBlockColor(BlockState var0, MapColor var1, ClientLevel var2, int var3) {
+        if (var1 != MapColor.STONE && var1 != MapColor.DEEPSLATE) {
+            return mapColorAbgr(var1);
+        }
+
+        if (var0.getBlock() instanceof DropExperienceBlock) {
+            return mapColorAbgr(var1);
+        }
+
+        return rockTone(var2, var3);
+    }
+
+    /** Uniform bright rock tone per dimension/depth class (ABGR). */
+    private static int rockTone(ClientLevel var0, int var1) {
+        if (var0.dimension() == Level.NETHER) {
+            return 0xFF3A303F;
+        }
+
+        if (var0.dimension() == Level.END) {
+            return 0xFFB8D2D5;
+        }
+
+        return var1 < 0 ? 0xFF74747A : 0xFFA2A2A4;
+    }
+
+    /**
      * Approximate cut-lid for an explored-but-unloaded chunk, rebuilt from the
      * persistent store (colors + surface heights, no per-block data), aligned
      * with the live slice look:
@@ -759,7 +846,7 @@ public final class MapTileCache {
 
         int var5 = bucketCenterY(var3);
         int var6 = sliceRange() * 2;
-        int var11 = mapColorAbgr(var5 < 0 ? MapColor.DEEPSLATE : MapColor.STONE);
+        int var11 = rockTone(var0, var5);
         int[] var7 = var4.colors();
         int[] var8 = var4.heights() == null ? defaultHeights() : var4.heights();
         int[] var9 = new int[256];
@@ -869,12 +956,15 @@ public final class MapTileCache {
         public final int[] heights;
         public boolean shaded;
         public final boolean stored;
+        /** Unshaded colors (lazily cloned on first shade) so a re-shade never darkens twice. */
+        public int[] base;
 
         Entry(int[] var1, int[] var2) {
             this.colors = var1;
             this.heights = var2;
             this.shaded = true;
             this.stored = false;
+            this.base = null;
         }
 
         Entry(int[] var1, int[] var2, boolean var3, boolean var4) {
@@ -882,6 +972,7 @@ public final class MapTileCache {
             this.heights = var2;
             this.shaded = var3;
             this.stored = var4;
+            this.base = null;
         }
     }
 }
