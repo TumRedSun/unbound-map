@@ -30,6 +30,7 @@ public final class UnboundConfig {
     public static final BooleanValue RADAR_PLAYERS;
     public static final BooleanValue RADAR_HOSTILES;
     public static final BooleanValue RADAR_PASSIVES;
+    public static final IntValue RADAR_Y_RANGE;
     public static final BooleanValue PERSIST_MAP;
     public static final ConfigValue<String> TELEPORT_COMMAND;
 
@@ -114,6 +115,13 @@ public final class UnboundConfig {
         RADAR_PLAYERS = var0.comment("Show other players on the radar").define("showPlayers", true);
         RADAR_HOSTILES = var0.comment("Show hostile mobs on the radar").define("showHostiles", true);
         RADAR_PASSIVES = var0.comment("Show passive mobs and villagers on the radar").define("showPassives", true);
+        RADAR_Y_RANGE = var0.comment(
+                "Show entities on the radar only within this many blocks",
+                " of your own altitude, so mobs in caves far below or",
+                " high in the sky do not clutter the map. 0 shows",
+                " entities at any height."
+            )
+            .defineInRange("verticalRange", 10, 0, 1024);
         var0.pop();
         var0.push("persistence");
         PERSIST_MAP = var0.comment(

@@ -48,7 +48,7 @@ public final class UnboundKeys {
             }
 
             while (TOGGLE_CAVE.consumeClick()) {
-                MapTileCache.toggleCaveMode();
+                MapTileCache.toggleMinimapSlice();
                 UnboundMapsClient.noteManualCaveToggle();
             }
         }

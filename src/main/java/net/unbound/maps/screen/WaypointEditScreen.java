@@ -86,7 +86,13 @@ public class WaypointEditScreen extends Screen {
         return Component.translatable(this.beacon ? "gui.unboundmaps.beacon.on" : "gui.unboundmaps.beacon.off");
     }
 
+    /** The dark veil and blur are drawn manually before the widgets. */
+    @Override
+    public void renderBackground(GuiGraphics var1, int var2, int var3, float var4) {
+    }
+
     public void render(GuiGraphics var1, int var2, int var3, float var4) {
+        this.renderBlurredBackground(var4);
         var1.fill(0, 0, this.width, this.height, -1072689132);
         int var5 = this.width / 2;
         var1.drawCenteredString(this.font, this.title, var5, 16, -1);

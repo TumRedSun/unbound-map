@@ -106,6 +106,9 @@ public final class EntityRadar {
             if (!categoryEnabled(var20)) {
                 continue;
             }
+            if (!heightOk(var20, var12)) {
+                continue;
+            }
             double var21 = var20.getX() - var6;
             double var23 = var20.getZ() - var8;
             if (var21 * var21 + var23 * var23 > var14) {
@@ -250,6 +253,64 @@ public final class EntityRadar {
             return UnboundConfig.RADAR_RANGE.get();
         } catch (NullPointerException | IllegalStateException var0) {
             return 64;
+        }
+    }
+
+    private static int verticalRange() {
+        try {
+            return UnboundConfig.RADAR_Y_RANGE.get();
+        } catch (NullPointerException | IllegalStateException var0) {
+            return 10;
+        }
+    }
+
+    /** Entities far above or below the player are hidden: a bat 50 blocks down is noise. */
+    private static boolean heightOk(Entity var0, Entity var1) {
+        int var2 = verticalRange();
+        if (var2 <= 0) {
+            return true;
+        } else {
+            double var3 = var0.getY(0.5F) - var1.getY(0.5F);
+            return Math.abs(var3) <= (double)var2;
+        }
+    }
+
+    /** Entity icons on the world map: same filters, positions follow the map view. */
+    public static void drawWorldMap(GuiGraphics var0, double var1, double var3, int var5, int var6, double var7, LocalPlayer var9) {
+        if (!flag(UnboundConfig.ENTITY_RADAR, true)) {
+            return;
+        }
+        Minecraft var10 = Minecraft.getInstance();
+        if (var9 == null || var10.level == null) {
+            return;
+        }
+        int var11 = radarRange();
+        double var12 = (double)var11 * (double)var11;
+        Matrix4f var14 = var0.pose().last().pose();
+        int var15 = 0;
+
+        for (Entity var17 : var10.level.entitiesForRendering()) {
+            if (var17 == var9 || var17.isSpectator()) {
+                continue;
+            }
+            if (!categoryEnabled(var17) || !heightOk(var17, var9)) {
+                continue;
+            }
+            double var18 = var17.getX() - var1;
+            double var20 = var17.getZ() - var3;
+            if (var18 * var18 + var20 * var20 > var12) {
+                continue;
+            }
+            float var22 = (float)(var5 / 2.0 + var18 / var7);
+            float var23 = (float)(var6 / 2.0 + var20 / var7);
+            if (var22 < -8.0F || var23 < -8.0F || var22 > (float)var5 + 8.0F || var23 > (float)var6 + 8.0F) {
+                continue;
+            }
+            if (drawIcon(var0, var14, var10, var17, var22, var23, false)) {
+                if (++var15 >= 100) {
+                    break;
+                }
+            }
         }
     }
 

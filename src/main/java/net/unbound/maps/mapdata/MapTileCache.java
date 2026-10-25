@@ -42,14 +42,43 @@ public final class MapTileCache {
     private static final int SLICE_BUCKET_BITS = 3;
     private static final Map<Long, MapTileCache.Entry> CHUNKS = new LinkedHashMap<>(4096, 0.75F, true);
     private static final Map<Integer, Map<Long, MapTileCache.Entry>> SLICES = new HashMap<>();
-    private static boolean sliceMode;
+    private static boolean minimapSlice;
+    private static boolean worldMapSlice;
     private static int sliceBucket;
 
     private MapTileCache() {
     }
 
-    public static boolean isCaveMode() {
-        return sliceMode;
+    /** Cave (slice) view of the HUD minimap — independent from the world map's. */
+    public static boolean isMinimapSlice() {
+        return minimapSlice;
+    }
+
+    /** Cave (slice) view of the world map — independent from the minimap's. */
+    public static boolean isWorldMapSlice() {
+        return worldMapSlice;
+    }
+
+    public static void setMinimapSlice(boolean var0) {
+        if (var0 != minimapSlice) {
+            minimapSlice = var0;
+            MinimapTexture.invalidateAll();
+        }
+    }
+
+    /** World map cells are keyed by (cave, bucket), so no invalidation is needed here. */
+    public static void setWorldMapSlice(boolean var0) {
+        worldMapSlice = var0;
+    }
+
+    public static boolean toggleMinimapSlice() {
+        setMinimapSlice(!minimapSlice);
+        return minimapSlice;
+    }
+
+    public static boolean toggleWorldMapSlice() {
+        setWorldMapSlice(!worldMapSlice);
+        return worldMapSlice;
     }
 
     public static int caveBucket() {
@@ -80,63 +109,55 @@ public final class MapTileCache {
         }
     }
 
-    public static boolean toggleCaveMode() {
-        sliceMode = !sliceMode;
-        clearAll();
-        MinimapTexture.invalidateAll();
-        WorldMapCells.clearAll();
-        return sliceMode;
-    }
-
     public static boolean updateCaveBucket(int var0) {
-        if (!sliceMode) {
+        int var1 = bucketOf(var0);
+        if (var1 == sliceBucket) {
             return false;
         } else {
-            int var1 = bucketOf(var0);
-            if (var1 != sliceBucket) {
-                sliceBucket = var1;
-                clearAll();
+            sliceBucket = var1;
+            SLICES.clear();
+            if (minimapSlice) {
                 MinimapTexture.invalidateAll();
-                WorldMapCells.clearAll();
-                return true;
-            } else {
-                return false;
             }
+
+            if (worldMapSlice) {
+                WorldMapCells.clearAll();
+            }
+
+            return true;
         }
     }
 
-    public static int colorFor(ClientLevel var0, int var1, int var2) {
-        return sliceMode ? getSliceColor(var0, var1, var2, sliceBucket) : getColor(var0, var1, var2);
+    public static int colorFor(ClientLevel var0, int var1, int var2, boolean var3) {
+        return var3 ? getSliceColor(var0, var1, var2, sliceBucket) : getColor(var0, var1, var2);
     }
 
-    public static int columnY(ClientLevel var0, int var1, int var2, int var3) {
-        int var4 = var1 >> 4;
-        int var5 = var2 >> 4;
-        long var6 = ChunkPos.asLong(var4, var5);
-        if (sliceMode) {
-            Map<Long, MapTileCache.Entry> var11 = SLICES.get(sliceBucket);
-            if (var11 != null) {
-                MapTileCache.Entry var13 = var11.get(var6);
-                if (var13 != null) {
-                    int var10 = var13.heights[(var2 & 15) << 4 | var1 & 15];
-                    if (var10 != Integer.MIN_VALUE) {
-                        return var10;
+    public static int columnY(ClientLevel var0, int var1, int var2, int var3, boolean var4) {
+        long var5 = ChunkPos.asLong(var1 >> 4, var2 >> 4);
+        if (var4) {
+            Map<Long, MapTileCache.Entry> var6 = SLICES.get(sliceBucket);
+            if (var6 != null) {
+                MapTileCache.Entry var7 = var6.get(var5);
+                if (var7 != null) {
+                    int var8 = var7.heights[(var2 & 15) << 4 | var1 & 15];
+                    if (var8 != Integer.MIN_VALUE) {
+                        return var8;
                     }
                 }
             }
 
             return sliceTopY(var0, var1, var2, var3);
         } else {
-            MapTileCache.Entry var8 = CHUNKS.get(var6);
-            if (var8 != null) {
-                int var9 = var8.heights[(var2 & 15) << 4 | var1 & 15];
-                if (var9 != Integer.MIN_VALUE) {
-                    return var9 - 1;
+            MapTileCache.Entry var6 = CHUNKS.get(var5);
+            if (var6 != null) {
+                int var7 = var6.heights[(var2 & 15) << 4 | var1 & 15];
+                if (var7 != Integer.MIN_VALUE) {
+                    return var7 - 1;
                 }
             }
 
-            int var12 = surfaceHeight(var0, var1, var2);
-            return var12 != Integer.MIN_VALUE ? var12 - 1 : var3;
+            int var8 = surfaceHeight(var0, var1, var2);
+            return var8 != Integer.MIN_VALUE ? var8 - 1 : var3;
         }
     }
 

@@ -101,7 +101,8 @@ public final class MinimapTexture {
             if (!dirtyChunks.isEmpty()) {
                 long[] var22 = dirtyChunks.toLongArray();
                 dirtyChunks.clear();
-                int var24 = MapTileCache.isCaveMode() ? 24 : Integer.MAX_VALUE;
+                boolean slice = MapTileCache.isMinimapSlice();
+                int var24 = slice ? 24 : Integer.MAX_VALUE;
                 int var26 = 0;
                 NativeImage var28 = texture.getPixels();
                 if (var28 != null) {
@@ -122,7 +123,7 @@ public final class MinimapTexture {
                                         for (int var19 = 0; var19 < 16; var19++) {
                                             int var20 = var15 + var19;
                                             if (var20 >= 0 && var20 < 512) {
-                                                var28.setPixelRGBA(var20, var18, MapTileCache.colorFor(var0, (var13 << 4) + var19, (var14 << 4) + var17));
+                                                var28.setPixelRGBA(var20, var18, MapTileCache.colorFor(var0, (var13 << 4) + var19, (var14 << 4) + var17, slice));
                                             }
                                         }
                                     }

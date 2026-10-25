@@ -24,7 +24,7 @@ public final class WorldMapCells {
     }
 
     public static WorldMapCells.Cell cell(int var0, int var1) {
-        return CELLS.get(new WorldMapCells.CellKey(var0, var1, MapTileCache.isCaveMode(), MapTileCache.caveBucket()));
+        return CELLS.get(new WorldMapCells.CellKey(var0, var1, MapTileCache.isWorldMapSlice(), MapTileCache.caveBucket()));
     }
 
     public static void clearAll() {
@@ -53,7 +53,7 @@ public final class WorldMapCells {
     }
 
     public static void ensureVisible(ClientLevel var0, double var1, double var3, int var5, int var6, double var7) {
-        boolean var9 = MapTileCache.isCaveMode();
+        boolean var9 = MapTileCache.isWorldMapSlice();
         int var10 = MapTileCache.caveBucket();
         int var11 = Math.floorDiv(floor(var1 - var5 * var7 / 2.0), 512);
         int var12 = Math.floorDiv(floor(var1 + var5 * var7 / 2.0), 512);
@@ -126,7 +126,7 @@ public final class WorldMapCells {
 
     private static void redrawDirty(ClientLevel var0, WorldMapCells.Cell var1) {
         if (!var1.dirty.isEmpty()) {
-            boolean var2 = MapTileCache.isCaveMode();
+            boolean var2 = MapTileCache.isWorldMapSlice();
             int var3 = MapTileCache.caveBucket();
             long[] var4 = var1.dirty.toLongArray();
             var1.dirty.clear();

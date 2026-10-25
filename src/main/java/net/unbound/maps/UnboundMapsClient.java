@@ -29,6 +29,7 @@ public final class UnboundMapsClient {
     private static ResourceKey<Level> lastDimension;
     private static long manualCaveUntil;
     private static boolean lastUnderground;
+    private static boolean appliedUnderground;
     private static int undergroundStableTicks;
 
     private UnboundMapsClient() {
@@ -89,16 +90,57 @@ public final class UnboundMapsClient {
      * drop below the solid terrain surface (OCEAN_FLOOR heightmap excludes water and
      * leaves), so swimming ON a river keeps the top view while diving or mining
      * switches to the slice view. A short hysteresis avoids flicker at the boundary.
+     * The minimap and the world map each keep their own slice mode and both
+     * follow the detected underground state.
      */
     private static void updateAutoCave(ClientLevel var0, LocalPlayer var1) {
         if (var1 == null) {
             return;
         }
+        boolean var2;
+        try {
+            var2 = UnboundConfig.AUTO_CAVE_MODE.get();
+        } catch (NullPointerException | IllegalStateException var3) {
+            return;
+        }
+
+        if (!var2 || System.currentTimeMillis() < manualCaveUntil) {
+            return;
+        }
+
+        int var4 = Mth.floor(var1.getEyeY());
+        int var5 = var0.getHeight(Types.OCEAN_FLOOR, var1.getBlockX(), var1.getBlockZ());
+        boolean var6 = var4 < var5;
+        if (var6 == appliedUnderground) {
+            undergroundStableTicks = 0;
+            lastUnderground = var6;
+        } else if (var6 != lastUnderground) {
+            lastUnderground = var6;
+            undergroundStableTicks = 1;
+        } else if (++undergroundStableTicks >= 15) {
+            undergroundStableTicks = 0;
+            appliedUnderground = var6;
+            MapTileCache.setMinimapSlice(var6);
+            MapTileCache.setWorldMapSlice(var6);
+        }
+    }
+
+    /**
+     * Called when the world map opens: immediately snaps the world map view
+     * to the player's current surface/underground state, without waiting
+     * for the hysteresis timer.
+     */
+    public static void syncWorldMapCaveToPlayer() {
+        Minecraft var0 = Minecraft.getInstance();
+        if (var0.player == null || var0.level == null) {
+            return;
+        }
+
         try {
             if (!UnboundConfig.AUTO_CAVE_MODE.get()) {
                 return;
             }
-        } catch (NullPointerException | IllegalStateException var2) {
+        } catch (NullPointerException | IllegalStateException var1) {
             return;
         }
 
@@ -106,19 +148,13 @@ public final class UnboundMapsClient {
             return;
         }
 
-        int var3 = Mth.floor(var1.getEyeY());
-        int var4 = var0.getHeight(Types.OCEAN_FLOOR, var1.getBlockX(), var1.getBlockZ());
-        boolean var5 = var3 < var4;
-        if (var5 == MapTileCache.isCaveMode()) {
-            undergroundStableTicks = 0;
-            lastUnderground = var5;
-        } else if (var5 != lastUnderground) {
-            lastUnderground = var5;
-            undergroundStableTicks = 1;
-        } else if (++undergroundStableTicks >= 15) {
-            undergroundStableTicks = 0;
-            MapTileCache.toggleCaveMode();
-        }
+        int var2 = Mth.floor(var0.player.getEyeY());
+        int var3 = var0.level.getHeight(Types.OCEAN_FLOOR, var0.player.getBlockX(), var0.player.getBlockZ());
+        boolean var4 = var2 < var3;
+        appliedUnderground = var4;
+        lastUnderground = var4;
+        undergroundStableTicks = 0;
+        MapTileCache.setWorldMapSlice(var4);
     }
 
     private static void onRenderLevelStage(RenderLevelStageEvent var0) {

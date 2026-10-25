@@ -88,7 +88,7 @@ public final class MinimapHud {
                 DrawHelper.playerArrow(var17, var6, var7, var3.getYRot());
                 boolean var18 = UnboundConfig.SHOW_COORDS.get();
                 boolean var19 = UnboundConfig.SHOW_BIOME.get();
-                boolean var20 = MapTileCache.isCaveMode();
+                boolean var20 = MapTileCache.isMinimapSlice();
                 int var21 = (var18 ? 1 : 0) + (var19 ? 1 : 0) + (var20 ? 1 : 0);
                 if (var21 > 0) {
                     int var22 = 2 * var5 + 6;

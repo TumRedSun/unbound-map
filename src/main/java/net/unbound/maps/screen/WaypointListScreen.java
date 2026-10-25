@@ -57,7 +57,13 @@ public class WaypointListScreen extends Screen {
         this.sorted.sort(Comparator.comparingDouble(var4x -> (var4x.x - var2) * (var4x.x - var2) + (var4x.z - var4) * (var4x.z - var4)));
     }
 
+    /** The dark veil and blur are drawn manually before the rows. */
+    @Override
+    public void renderBackground(GuiGraphics var1, int var2, int var3, float var4) {
+    }
+
     public void render(GuiGraphics var1, int var2, int var3, float var4) {
+        this.renderBlurredBackground(var4);
         this.resort();
         var1.fill(0, 0, this.width, this.height, -1072689132);
         var1.drawCenteredString(this.font, this.title, this.width / 2, 12, -1);

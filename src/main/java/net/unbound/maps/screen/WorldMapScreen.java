@@ -21,6 +21,7 @@ import net.unbound.maps.UnboundMapsMod;
 import net.unbound.maps.mapdata.MapTileCache;
 import net.unbound.maps.mapdata.WorldMapCells;
 import net.unbound.maps.render.DrawHelper;
+import net.unbound.maps.render.EntityRadar;
 import net.unbound.maps.render.MinimapHud;
 import net.unbound.maps.render.WaypointRenderer;
 import net.unbound.maps.util.TeleportUtil;
@@ -29,8 +30,8 @@ import net.unbound.maps.waypoints.WaypointManager;
 import org.joml.Matrix4f;
 
 public class WorldMapScreen extends Screen {
-    private static final double MIN_BPP = 0.5;
-    private static final double MAX_BPP = 2.0;
+    private static final double MIN_BPP = 0.1;
+    private static final double MAX_BPP = 4.0;
     private double centerX;
     private double centerZ;
     private double blocksPerPixel = 1.0;
@@ -53,10 +54,17 @@ public class WorldMapScreen extends Screen {
             this.centerX = var1.player.getX();
             this.centerZ = var1.player.getZ();
             this.initialized = true;
+            UnboundMapsClient.syncWorldMapCaveToPlayer();
         }
     }
 
+    /** Background is drawn manually; the blur pass must run before the map, not over it. */
+    @Override
+    public void renderBackground(GuiGraphics var1, int var2, int var3, float var4) {
+    }
+
     public void render(GuiGraphics var1, int var2, int var3, float var4) {
+        this.renderBlurredBackground(var4);
         Minecraft var5 = Minecraft.getInstance();
         int var6 = this.width;
         int var7 = this.height;
@@ -101,7 +109,20 @@ public class WorldMapScreen extends Screen {
             }
 
             RenderSystem.setShaderColor(1.0F, 1.0F, 1.0F, 1.0F);
-            RenderSystem.disableBlend();
+            RenderSystem.enableBlend();
+            RenderSystem.defaultBlendFunc();
+            if (var2 >= 0 && var3 >= 0 && var2 < var6 && var3 < var7) {
+                double mouseWX = this.centerX + (var2 - var6 / 2.0) * this.blocksPerPixel;
+                double mouseWZ = this.centerZ + (var3 - var7 / 2.0) * this.blocksPerPixel;
+                int chunkX = Math.floorDiv(Mth.floor(mouseWX), 16);
+                int chunkZ = Math.floorDiv(Mth.floor(mouseWZ), 16);
+                float x0 = (float)(var6 / 2.0 + (chunkX * 16 - this.centerX) / this.blocksPerPixel);
+                float y0 = (float)(var7 / 2.0 + (chunkZ * 16 - this.centerZ) / this.blocksPerPixel);
+                float sizePx = (float)(16.0 / this.blocksPerPixel);
+                DrawHelper.outline(var17, x0 - 1.0F, y0 - 1.0F, x0 + sizePx + 1.0F, y0 + sizePx + 1.0F, 1.0F, 1711276032);
+                DrawHelper.outline(var17, x0, y0, x0 + sizePx, y0 + sizePx, 1.0F, -1);
+            }
+
             if (var5.player != null) {
                 double var35 = var6 / 2.0 + (var5.player.getX() - this.centerX) / this.blocksPerPixel;
                 double var36 = var7 / 2.0 + (var5.player.getZ() - this.centerZ) / this.blocksPerPixel;
@@ -109,6 +130,8 @@ public class WorldMapScreen extends Screen {
             }
 
             WaypointRenderer.drawWorldMapMarkers(var1, this.centerX, this.centerZ, var6 / 2.0, var7 / 2.0, this.blocksPerPixel);
+            EntityRadar.drawWorldMap(var1, this.centerX, this.centerZ, var6, var7, this.blocksPerPixel, var5.player);
+            RenderSystem.disableBlend();
         }
 
         this.renderCursorBar(var1, var2, var3);
@@ -134,7 +157,7 @@ public class WorldMapScreen extends Screen {
             double var12 = this.centerZ + (var3 - this.height / 2.0) * this.blocksPerPixel;
             var7 = Mth.floor(var10);
             var9 = Mth.floor(var12);
-            var8 = MapTileCache.columnY(var4.level, var7, var9, var5);
+            var8 = MapTileCache.columnY(var4.level, var7, var9, var5, MapTileCache.isWorldMapSlice());
             BlockPos var13 = new BlockPos(var7, Math.max(var8, var4.level.getMinBuildHeight()), var9);
             BlockState var14 = var4.level.getBlockState(var13);
             blockName = var14.getBlock().getName().getString();
@@ -165,7 +188,7 @@ public class WorldMapScreen extends Screen {
             var14b = var14b + "  |  " + blockName;
         }
 
-        if (MapTileCache.isCaveMode()) {
+        if (MapTileCache.isWorldMapSlice()) {
             var14b = var14b + "  §6[" + I18n.get("gui.unboundmaps.caveLabel") + "]§r";
         }
 
@@ -182,16 +205,21 @@ public class WorldMapScreen extends Screen {
         double var10 = this.centerZ + (var3 - this.height / 2.0) * this.blocksPerPixel;
         int var12 = Mth.floor(var8);
         int var13 = Mth.floor(var10);
-        int var14 = var6 != null ? MapTileCache.columnY(var6, var12, var13, var7) : var7;
+        int var14 = var6 != null ? MapTileCache.columnY(var6, var12, var13, var7, MapTileCache.isWorldMapSlice()) : var7;
         Waypoint var15 = this.findWaypointNear(var1, var3);
         List<String> var16 = new ArrayList<>();
+        List<Integer> actions = new ArrayList<>();
         if (var15 != null) {
             var16.add(I18n.get("gui.unboundmaps.menuEdit") + " " + var15.name);
+            actions.add(ACTION_EDIT);
             var16.add(I18n.get("gui.unboundmaps.menuDelete") + " " + var15.name);
+            actions.add(ACTION_DELETE);
         }
 
         var16.add(I18n.get("gui.unboundmaps.menuWaypoint"));
+        actions.add(ACTION_CREATE);
         var16.add(I18n.get("gui.unboundmaps.menuTeleport"));
+        actions.add(ACTION_TELEPORT);
         int var17 = Math.max(
             Math.max(
                 var5.font.width("X: " + var12 + "  Y: " + var14 + "  Z: " + var13),
@@ -204,7 +232,7 @@ public class WorldMapScreen extends Screen {
         int var20 = var19 + var16.size() * 14 + 3;
         int var21 = (int)Math.min(var1, (double)(this.width - var18 - 2));
         int var22 = (int)Math.min(var3, (double)(this.height - var20 - 2));
-        this.menu = new WorldMapScreen.Menu(var21, var22, var18, var20, var12, var14, var13, var16, var15);
+        this.menu = new WorldMapScreen.Menu(var21, var22, var18, var20, var12, var14, var13, var16, actions, var15);
     }
 
     private Waypoint findWaypointNear(double var1, double var3) {
@@ -261,18 +289,18 @@ public class WorldMapScreen extends Screen {
         this.menu = null;
         int var4 = var3.y + 30;
         int var5 = (int)((var1 - var4) / 14.0);
-        if (var5 >= 0 && var5 < var3.entries.size()) {
-            int var6 = var3.target != null ? var5 : (var5 == 0 ? 0 : 1);
+        if (var5 >= 0 && var5 < var3.actions.size()) {
+            int var6 = var3.actions.get(var5);
             switch (var6) {
-                case 1:
+                case ACTION_TELEPORT:
                     this.teleportTo(var3.blockX, var3.blockY, var3.blockZ);
                     break;
-                case 2:
+                case ACTION_EDIT:
                     if (var3.target != null) {
                         this.minecraft.setScreen(new WaypointEditScreen(this, var3.target));
                     }
                     break;
-                case 3:
+                case ACTION_DELETE:
                     if (var3.target != null) {
                         WaypointManager.remove(var3.target.id);
                     }
@@ -303,7 +331,7 @@ public class WorldMapScreen extends Screen {
 
     public boolean mouseScrolled(double var1, double var3, double var5, double var7) {
         double var9 = var7 > 0.0 ? 0.8 : 1.25;
-        double var11 = Mth.clamp(this.blocksPerPixel * var9, 0.5, 2.0);
+        double var11 = Mth.clamp(this.blocksPerPixel * var9, MIN_BPP, MAX_BPP);
         if (var11 != this.blocksPerPixel) {
             double var13 = this.centerX + (var1 - this.width / 2.0) * this.blocksPerPixel;
             double var15 = this.centerZ + (var3 - this.height / 2.0) * this.blocksPerPixel;
@@ -340,7 +368,7 @@ public class WorldMapScreen extends Screen {
                     Minecraft var14 = Minecraft.getInstance();
                     int var15 = var14.player != null ? var14.player.getBlockY() : 64;
                     if (var14.level != null) {
-                        var15 = MapTileCache.columnY(var14.level, var12, var13, var15);
+                        var15 = MapTileCache.columnY(var14.level, var12, var13, var15, MapTileCache.isWorldMapSlice());
                     }
 
                     this.openWaypointEditor(var12, var15, var13);
@@ -373,7 +401,7 @@ public class WorldMapScreen extends Screen {
             this.minecraft.setScreen(new WaypointListScreen(this));
             return true;
         } else if (var1 == 67) {
-            MapTileCache.toggleCaveMode();
+            MapTileCache.toggleWorldMapSlice();
             UnboundMapsClient.noteManualCaveToggle();
             return true;
         } else {
@@ -399,9 +427,10 @@ public class WorldMapScreen extends Screen {
         final int blockY;
         final int blockZ;
         final List<String> entries;
+        final List<Integer> actions;
         final Waypoint target;
 
-        Menu(int var1, int var2, int var3, int var4, int var5, int var6, int var7, List<String> var8, Waypoint var9) {
+        Menu(int var1, int var2, int var3, int var4, int var5, int var6, int var7, List<String> var8, List<Integer> var9, Waypoint var10) {
             this.x = var1;
             this.y = var2;
             this.width = var3;
@@ -410,7 +439,8 @@ public class WorldMapScreen extends Screen {
             this.blockY = var6;
             this.blockZ = var7;
             this.entries = var8;
-            this.target = var9;
+            this.actions = var9;
+            this.target = var10;
         }
     }
 }

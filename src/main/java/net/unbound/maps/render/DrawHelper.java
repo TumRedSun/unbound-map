@@ -78,8 +78,27 @@ public final class DrawHelper {
         double var4 = Math.toRadians(var3);
         float var6 = (float)(-Math.sin(var4));
         float var7 = (float)Math.cos(var4);
-        arrowShape(var0, var1, var2, var6, var7, 8.0F, 5.5F, -267382764);
-        arrowShape(var0, var1, var2, var6, var7, 6.5F, 4.0F, -1);
+        arrowShape(var0, var1, var2, var6, var7, 11.5F, 8.0F, 1711276032);
+        arrowShape(var0, var1, var2, var6, var7, 10.0F, 6.9F, -251657176);
+        arrowShape(var0, var1, var2, var6, var7, 8.0F, 5.4F, -1);
+    }
+
+    /** Rectangle outline drawn as four thin quads, crisp at any zoom. */
+    public static void outline(Matrix4f var0, float var1, float var2, float var3, float var4, float var5, int var6) {
+        RenderSystem.setShader(GameRenderer::getPositionColorShader);
+        BufferBuilder var7 = Tesselator.getInstance().begin(Mode.QUADS, DefaultVertexFormat.POSITION_COLOR);
+        quad(var7, var0, var1, var2, var3, var2 + var5, var6);
+        quad(var7, var0, var1, var4 - var5, var3, var4, var6);
+        quad(var7, var0, var1, var2 + var5, var1 + var5, var4 - var5, var6);
+        quad(var7, var0, var3 - var5, var2 + var5, var3, var4 - var5, var6);
+        BufferUploader.drawWithShader(var7.buildOrThrow());
+    }
+
+    private static void quad(BufferBuilder var0, Matrix4f var1, float var2, float var3, float var4, float var5, int var6) {
+        addColored(var0, var1, var2, var3, var6);
+        addColored(var0, var1, var2, var5, var6);
+        addColored(var0, var1, var4, var5, var6);
+        addColored(var0, var1, var4, var3, var6);
     }
 
     private static void arrowShape(Matrix4f var0, float var1, float var2, float var3, float var4, float var5, float var6, int var7) {
