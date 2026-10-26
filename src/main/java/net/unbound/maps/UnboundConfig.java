@@ -108,11 +108,16 @@ public final class UnboundConfig {
             )
             .defineInRange("sliceRange", 10, 2, 64);
         AUTO_CAVE_MODE = var0.comment(
-                "Automatically switch between surface and cave mode",
-                " like Xaero does: cave mode engages when the player's",
-                " eyes drop below the solid terrain surface (OCEAN_FLOOR",
-                " heightmap), so swimming ON water still shows the top view,",
-                " while diving or mining switches to the slice view.",
+                "Automatically switch between surface and cave mode:",
+                " cave mode engages when ANY of these is true -",
+                "  1. a solid lid (motion-blocking, non-foliage block) sits",
+                "     directly above the player's head (a cave/room ceiling),",
+                "  2. the player stands in an underground biome (vanilla",
+                "     dripstone/lush/deep dark plus modded cave biomes such as",
+                "     Terralith's cave/* and *_caves families),",
+                "  3. the player's eyes are below the solid terrain surface",
+                "     (OCEAN_FLOOR heightmap), so diving switches to the slice",
+                "     view while swimming ON water still shows the top view.",
                 " Pressing C toggles the mode manually and overrides",
                 " the automation until the underground state changes again."
             )

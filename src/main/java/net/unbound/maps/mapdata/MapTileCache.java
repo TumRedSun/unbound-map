@@ -32,10 +32,11 @@ import net.unbound.maps.UnboundConfig;
  * biome tinting (grass/foliage/water), dynamic light shading (block light from
  * torches/lava/glowstone glows at night, sky light follows the day cycle) and
  * cross-chunk hillshading.
- * Slice (cave) tiles: Xaero-style "cut lid" view. Everything above the view
- * height is treated as removed; the first non-air block below it (a cave floor,
- * a ravine bottom, lava) is rendered at any depth, lit by the light inside the
- * cavity itself, with 16 perceptual light gradations.
+ * Slice (cave) tiles: Xaero-style "cut lid" view at an EXACT height. Everything
+ * above the cut plane is treated as removed; the block at the cut renders bright
+ * (the cross-section wall), the first non-air block below an open cut (a cave
+ * floor, a ravine bottom, lava) is rendered at any depth, lit by the light
+ * inside the cavity itself, with 16 perceptual light gradations.
  *
  * Final tiles are recorded in {@link MapStore} so explored-but-unloaded chunks
  * keep rendering from disk.
@@ -44,9 +45,9 @@ public final class MapTileCache {
     public static final int UNKNOWN = -15723752;
     private static final int MAX_ENTRIES = 40000;
     private static final int MAX_SLICE_ENTRIES = 8000;
-    private static final int MAX_SLICE_BUCKETS = 4;
+    private static final int MAX_SLICE_BUCKETS = 8;
     private static final Map<Long, MapTileCache.Entry> CHUNKS = new LinkedHashMap<>(4096, 0.75F, true);
-    /** Slice (cave) tiles per 8-block bucket; access-ordered so old buckets can be trimmed. */
+    /** Slice (cave) tiles per exact cut Y; access-ordered so old heights can be trimmed. */
     private static final Map<Integer, Map<Long, MapTileCache.Entry>> SLICES = new LinkedHashMap<>(8, 0.75F, true);
     private static boolean cave;
     private static int sliceBucket;
@@ -80,7 +81,7 @@ public final class MapTileCache {
         return cave;
     }
 
-    /** World map active slice bucket (8-block altitude band). */
+    /** World map active slice key (the exact cut Y + 512). */
     public static int caveBucket() {
         return sliceBucket;
     }
@@ -90,14 +91,14 @@ public final class MapTileCache {
         return miniCave;
     }
 
-    /** Minimap active slice bucket (8-block altitude band). */
+    /** Minimap active slice key (the exact cut Y + 512). */
     public static int miniBucket() {
         return miniBucket;
     }
 
     /**
      * Re-syncs the view flags from {@link CaveState} and invalidates caches
-     * when the view mode or the slice bucket changed. Cheap to call every tick.
+     * when the view mode or the slice height changed. Cheap to call every tick.
      */
     public static void onCaveViewChanged() {
         boolean newCave = CaveState.isWorldCave();
@@ -105,9 +106,9 @@ public final class MapTileCache {
         if (newCave != cave || newBucket != sliceBucket) {
             cave = newCave;
             sliceBucket = newBucket;
-            // the per-bucket tile caches are KEPT: moving up or down a cave reuses
+            // the per-height tile caches are KEPT: moving up or down a cave reuses
             // the slices computed for heights you already visited (clearing them
-            // made the view go dark for seconds on every 8-block height change)
+            // made the view go dark for seconds on every height change)
             trimSlices();
         }
 
@@ -207,18 +208,26 @@ public final class MapTileCache {
         return var0 & 0xFF000000 | clamp255(var3) << 16 | clamp255(var2) << 8 | clamp255(var1);
     }
 
+    /**
+     * Slice view height key = the EXACT cut Y + 512 (no 8-block quantization).
+     * The cut plane must never sit below the player's feet: for 7 of every 8
+     * heights the old bucket-bottom cut landed INSIDE the floor under the
+     * player (their own gallery rendered as solid bright rock), and the later
+     * "scan the whole 8-block band" band hack made one continuous cavern
+     * flicker between bright rock and dark cavity following its 3D ceiling
+     * relief - the cave shattered into "broken blocks painting whole chunks".
+     * A single plane at the exact Y is what Xaero renders and reads cleanly.
+     */
     public static int bucketOf(int var0) {
-        return var0 + 512 >> 3;
+        return var0 + 512;
     }
 
     /**
-     * Cut height of a slice bucket - the bucket's LOWEST block. The cut is never
-     * ABOVE the player's feet (the old center-of-bucket cut showed the floor of
-     * the level ABOVE the player for half of every 8-block band, which looked
-     * like the map "not showing my height").
+     * Cut height of a slice bucket - the EXACT cut Y (the key stores Y + 512,
+     * see {@link #bucketOf}).
      */
     public static int bucketCenterY(int var0) {
-        return (var0 << 3) - 512;
+        return var0 - 512;
     }
 
     public static int sliceRange() {
@@ -701,68 +710,51 @@ public final class MapTileCache {
             int var6 = sliceRange() * 2;
             int var7 = var0.getMinBuildHeight();
             int var8 = var0.getMaxBuildHeight();
-            // the slice inspects the WHOLE 8-block view band, not a single fixed Y:
-            // band top = the highest block of the band, band bottom = the lowest
-            int var30 = Mth.clamp(var5 + 7, var7, var8 - 1);
-            int var31 = Mth.clamp(var5, var7, var8 - 1);
+            // Xaero-style single-plane cut at the EXACT view height: everything
+            // above the cut is removed. The old 8-block band scan made one
+            // continuous cavern flicker between bright rock and dark cavity
+            // following its 3D ceiling relief - the cave shattered into "broken
+            // blocks painting whole chunks" (the band was solid where the
+            // ceiling was high and a cavity where it was low). A single plane
+            // renders a clean cross-section: solid-at-cut columns show the cut
+            // block bright (the wall the lid was cut through), air-at-cut
+            // columns show the lit floor below.
             int[] var9 = new int[256];
             int[] var10 = new int[256];
             int var11 = var1 << 4;
             int var12 = var2 << 4;
             MutableBlockPos var13 = new MutableBlockPos();
+            int var30 = Mth.clamp(var5, var7, var8 - 1);
 
             for (int var14 = 0; var14 < 16; var14++) {
                 for (int var15 = 0; var15 < 16; var15++) {
                     int var16 = var15 << 4 | var14;
-                    // Xaero-readable cut-lid: the lid is removed down to the band top
-                    // and a column counts as a CAVITY when ANY block of the whole
-                    // 8-block view band is air. The 1.10/1.11 check looked only at the
-                    // band's LOWEST block, so every gallery intersecting the band
-                    // higher up was missed: the level the player actually walked
-                    // through rendered as solid bright rock (the cut sat INSIDE the
-                    // floor under the player's feet for 7 of every 8 heights) and
-                    // caves fell apart into isolated colored squares on a flat grey
-                    // field - "broken blocks painting whole chunks". Scanning the
-                    // band keeps rock bright and cavities dark like Xaero's caves
-                    // and always shows the cave the player is standing in (the feet
-                    // block is air and always inside the band).
-                    BlockState var32 = null;
-                    int var33 = Integer.MIN_VALUE;
-
-                    for (int var34 = var30; var34 >= var31; var34--) {
-                        var13.set(var11 + var14, var34, var12 + var15);
-                        BlockState var35 = var4.getBlockState(var13);
-                        if (var35.isAir()) {
-                            var33 = var34;
-                            break;
-                        }
-
-                        if (var32 == null) {
-                            var32 = var35;
-                        }
-                    }
-
-                    if (var33 == Integer.MIN_VALUE) {
-                        // solid through the whole band: uniform BRIGHT rock so the cut
-                        // plane reads as solid ground (raw deepslate/sculk/tuff map
-                        // colors are near-black - sliceBlockColor keeps the plane bright)
+                    var13.set(var11 + var14, var30, var12 + var15);
+                    BlockState var17 = var4.getBlockState(var13);
+                    if (!var17.isAir()) {
+                        // solid at the cut: the cross-section wall, rendered at
+                        // the cut block itself, bright (uniform rock tone for
+                        // the stone family - raw deepslate/sculk/tuff map
+                        // colors are near-black and read as holes)
                         var9[var16] = var30;
-                        MapColor var41 = var32.getMapColor(var4, var13);
+                        MapColor var41 = var17.getMapColor(var4, var13);
                         int var36 = mapColorAbgr(var41);
-                        if (!var32.getFluidState().isEmpty()) {
-                            if (var32.getFluidState().is(net.minecraft.tags.FluidTags.LAVA)) {
+                        if (!var17.getFluidState().isEmpty()) {
+                            if (var17.getFluidState().is(net.minecraft.tags.FluidTags.LAVA)) {
                                 var36 = lavaColor(var36);
                             } else {
                                 var36 = shadeAbgr(var36, 0.85F);
                             }
                         } else {
-                            var36 = sliceBlockColor(var32, var41, var0, var30);
+                            var36 = sliceBlockColor(var17, var41, var0, var30);
                         }
 
                         var10[var16] = var36;
                     } else {
-                        // cavity inside the band: render the floor below the opening
-                        int var34 = sliceTop(var4, var14, var15, var33, var7, var8);
+                        // air at the cut: open cavity - render the floor below,
+                        // scanning all the way down (ravines, lava lakes and
+                        // galleries far below the cut stay visible)
+                        int var34 = sliceTop(var4, var14, var15, var30, var7, var8);
                         var9[var16] = var34;
                         if (var34 == Integer.MIN_VALUE) {
                             var10[var16] = -15723752;
@@ -854,11 +846,13 @@ public final class MapTileCache {
     /**
      * Approximate cut-lid for an explored-but-unloaded chunk, rebuilt from the
      * persistent store (colors + surface heights, no per-block data), aligned
-     * with the live slice look:
-     * - columns whose real surface lies BELOW the view height are open cavities
-     *   (valleys, ocean floors) - the sky-lit floor shows the surface color;
-     * - columns whose terrain rises above the view height are solid at the cut:
-     *   neutral stone/deepslate grey, matching the full-bright rock of live chunks.
+     * with the live single-plane slice:
+     * - columns whose real surface lies BELOW the cut height are open at the
+     *   cut (valleys, ocean floors, caverns the store cannot see) - the floor
+     *   shows the stored surface color, capped dark like the live cavity path;
+     * - columns whose terrain rises to or above the cut height are solid at
+     *   the cut: neutral stone/deepslate grey, matching the full-bright rock
+     *   of live chunks.
      */
     private static MapTileCache.Entry storedSliceChunk(ClientLevel var0, int var1, int var2, int var3) {
         if (!MapStore.isEnabled()) {
@@ -872,7 +866,6 @@ public final class MapTileCache {
 
         int var5 = bucketCenterY(var3);
         int var6 = sliceRange() * 2;
-        int var14 = var5 + 7; // band top, aligned with the live slice band scan
         int var11 = rockTone(var0, var5);
         int[] var7 = var4.colors();
         int[] var8 = var4.heights() == null ? defaultHeights() : var4.heights();
@@ -883,11 +876,11 @@ public final class MapTileCache {
             if (var7[var12] != UNKNOWN && var8[var12] != Integer.MIN_VALUE) {
                 int var13 = var8[var12];
                 var10[var12] = var13;
-                if (var13 >= var14) {
-                    // solid through the whole view band: unknown rock, same grey as live rock
+                if (var13 >= var5) {
+                    // terrain reaches the cut plane: solid at the cut, same grey as live rock
                     var9[var12] = shadeAbgr(var11, 0.9F);
                 } else {
-                    // open inside the band down to the stored surface: cavity floor,
+                    // open at the cut down to the stored surface: cavity floor,
                     // capped dark exactly like the live slice path - the old 0.45+
                     // "sky-lit" floors mismatched the live dark floors and showed up
                     // as random bright rectangles scattered over the stored map
