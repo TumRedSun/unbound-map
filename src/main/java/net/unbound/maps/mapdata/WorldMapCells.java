@@ -236,13 +236,13 @@ public final class WorldMapCells {
         int var7 = var2 * STRIP_ROWS;
 
         for (int var8 = var7; var8 < var7 + STRIP_ROWS; var8++) {
-            int var9 = var6 + (var8 << var1.lod) + (var4 >> 1);
+            int var9 = var6 + (var8 << var1.lod);
 
             for (int var10 = 0; var10 < CELL; var10++) {
-                int var11 = var5 + (var10 << var1.lod) + (var4 >> 1);
+                int var11 = var5 + (var10 << var1.lod);
                 int var12 = var1.cave
-                    ? MapTileCache.getSliceColor(var0, var11, var9, var1.bucket)
-                    : MapTileCache.getColor(var0, var11, var9);
+                    ? caveTexelColor(var0, var11, var9, var1.bucket, var4)
+                    : MapTileCache.getColor(var0, var11 + (var4 >> 1), var9 + (var4 >> 1));
                 var3.setPixelRGBA(var10, var8, var12);
             }
         }
@@ -281,14 +281,54 @@ public final class WorldMapCells {
 
         for (int var16 = var13; var16 <= var15; var16++) {
             for (int var17 = var12; var17 <= var14; var17++) {
-                int var18 = var6 + (var17 << var1.lod) + (var5 >> 1);
-                int var19 = var7 + (var16 << var1.lod) + (var5 >> 1);
+                int var18 = var6 + (var17 << var1.lod);
+                int var19 = var7 + (var16 << var1.lod);
                 int var20 = var1.cave
-                    ? MapTileCache.getSliceColor(var0, var18, var19, var1.bucket)
-                    : MapTileCache.getColor(var0, var18, var19);
+                    ? caveTexelColor(var0, var18, var19, var1.bucket, var5)
+                    : MapTileCache.getColor(var0, var18 + (var5 >> 1), var19 + (var5 >> 1));
                 var4.setPixelRGBA(var17, var16, var20);
             }
         }
+    }
+
+    /**
+     * One texel of a CAVE cell. At stride 1 it is the block color itself; at
+     * higher lod (zoomed out) the texel AVERAGES the four quadrant samples
+     * instead of taking whichever single block the center hits - a lone ore
+     * block or a lit cave floor used to expand into a full 2^lod-block square
+     * and read as "broken blocks painting whole chunks" on zoomed-out cave maps.
+     */
+    private static int caveTexelColor(ClientLevel var0, int var1, int var2, int var3, int var4) {
+        if (var4 <= 1) {
+            return MapTileCache.getSliceColor(var0, var1, var2, var3);
+        }
+
+        int var5 = var4 >> 2;
+        int var6 = var4 * 3 >> 2;
+        int var7 = 0;
+        int var8 = 0;
+        int var9 = 0;
+        int var10 = 0;
+
+        for (int var11 = 0; var11 < 4; var11++) {
+            int var12 = var1 + (var11 == 0 || var11 == 2 ? var5 : var6);
+            int var13 = var2 + (var11 < 2 ? var5 : var6);
+            int var14 = MapTileCache.getSliceColor(var0, var12, var13, var3);
+            if (var14 == MapTileCache.UNKNOWN || (var14 >>> 24) != 0xFF) {
+                continue;
+            }
+
+            var7 += var14 & 0xFF;
+            var8 += var14 >>> 8 & 0xFF;
+            var9 += var14 >>> 16 & 0xFF;
+            var10++;
+        }
+
+        if (var10 == 0) {
+            return MapTileCache.UNKNOWN;
+        }
+
+        return 0xFF000000 | var9 / var10 << 16 | var8 / var10 << 8 | var7 / var10;
     }
 
     private static void evictOld() {

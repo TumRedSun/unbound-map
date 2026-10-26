@@ -701,7 +701,10 @@ public final class MapTileCache {
             int var6 = sliceRange() * 2;
             int var7 = var0.getMinBuildHeight();
             int var8 = var0.getMaxBuildHeight();
-            int var30 = Mth.clamp(var5, var7, var8 - 1);
+            // the slice inspects the WHOLE 8-block view band, not a single fixed Y:
+            // band top = the highest block of the band, band bottom = the lowest
+            int var30 = Mth.clamp(var5 + 7, var7, var8 - 1);
+            int var31 = Mth.clamp(var5, var7, var8 - 1);
             int[] var9 = new int[256];
             int[] var10 = new int[256];
             int var11 = var1 << 4;
@@ -711,71 +714,94 @@ public final class MapTileCache {
             for (int var14 = 0; var14 < 16; var14++) {
                 for (int var15 = 0; var15 < 16; var15++) {
                     int var16 = var15 << 4 | var14;
-                    // Xaero-readable cut-lid: what matters is whether the column is
-                    // SOLID at the view height or has a CAVITY there. The old code
-                    // always rendered the first block below the cut, so solid rock
-                    // and tunnel floors were the same stone grey and caves were an
-                    // unreadable mush - now rock is bright and cavities are dark
-                    // shapes (with torch-lit floors glowing), like Xaero's caves.
-                    var13.set(var11 + var14, var30, var12 + var15);
-                    BlockState var31 = var4.getBlockState(var13);
-                    if (!var31.isAir()) {
-                        // solid at the cut level: uniform BRIGHT rock so the cut plane
-                        // reads as solid ground. The 1.10.0 version rendered the raw map
-                        // color of the block AT the cut - deepslate/sculk/tuff are all
-                        // near-black map colors, so "full-bright rock" rendered almost
-                        // black and the deep dark was an unreadable colorful mush.
-                        var9[var16] = var30;
-                        MapColor var41 = var31.getMapColor(var4, var13);
-                        int var32 = mapColorAbgr(var41);
-                        if (!var31.getFluidState().isEmpty()) {
-                            if (var31.getFluidState().is(net.minecraft.tags.FluidTags.LAVA)) {
-                                var32 = lavaColor(var32);
-                            } else {
-                                var32 = shadeAbgr(var32, 0.85F);
-                            }
-                        } else {
-                            var32 = sliceBlockColor(var31, var41, var0, var30);
+                    // Xaero-readable cut-lid: the lid is removed down to the band top
+                    // and a column counts as a CAVITY when ANY block of the whole
+                    // 8-block view band is air. The 1.10/1.11 check looked only at the
+                    // band's LOWEST block, so every gallery intersecting the band
+                    // higher up was missed: the level the player actually walked
+                    // through rendered as solid bright rock (the cut sat INSIDE the
+                    // floor under the player's feet for 7 of every 8 heights) and
+                    // caves fell apart into isolated colored squares on a flat grey
+                    // field - "broken blocks painting whole chunks". Scanning the
+                    // band keeps rock bright and cavities dark like Xaero's caves
+                    // and always shows the cave the player is standing in (the feet
+                    // block is air and always inside the band).
+                    BlockState var32 = null;
+                    int var33 = Integer.MIN_VALUE;
+
+                    for (int var34 = var30; var34 >= var31; var34--) {
+                        var13.set(var11 + var14, var34, var12 + var15);
+                        BlockState var35 = var4.getBlockState(var13);
+                        if (var35.isAir()) {
+                            var33 = var34;
+                            break;
                         }
 
-                        var10[var16] = var32;
+                        if (var32 == null) {
+                            var32 = var35;
+                        }
+                    }
+
+                    if (var33 == Integer.MIN_VALUE) {
+                        // solid through the whole band: uniform BRIGHT rock so the cut
+                        // plane reads as solid ground (raw deepslate/sculk/tuff map
+                        // colors are near-black - sliceBlockColor keeps the plane bright)
+                        var9[var16] = var30;
+                        MapColor var41 = var32.getMapColor(var4, var13);
+                        int var36 = mapColorAbgr(var41);
+                        if (!var32.getFluidState().isEmpty()) {
+                            if (var32.getFluidState().is(net.minecraft.tags.FluidTags.LAVA)) {
+                                var36 = lavaColor(var36);
+                            } else {
+                                var36 = shadeAbgr(var36, 0.85F);
+                            }
+                        } else {
+                            var36 = sliceBlockColor(var32, var41, var0, var30);
+                        }
+
+                        var10[var16] = var36;
                     } else {
-                        // cavity at the cut level: find the floor below
-                        int var33 = sliceTop(var4, var14, var15, var5, var7, var8);
-                        var9[var16] = var33;
-                        if (var33 == Integer.MIN_VALUE) {
+                        // cavity inside the band: render the floor below the opening
+                        int var34 = sliceTop(var4, var14, var15, var33, var7, var8);
+                        var9[var16] = var34;
+                        if (var34 == Integer.MIN_VALUE) {
                             var10[var16] = -15723752;
                         } else {
-                            var13.set(var11 + var14, var33, var12 + var15);
-                            BlockState var34 = var4.getBlockState(var13);
-                            int var35 = sliceBlockColor(var34, var34.getMapColor(var4, var13), var0, var33);
-                            if (!var34.getFluidState().isEmpty()) {
-                                if (var34.getFluidState().is(net.minecraft.tags.FluidTags.LAVA)) {
-                                    var35 = lavaColor(mapColorAbgr(var34.getMapColor(var4, var13)));
+                            var13.set(var11 + var14, var34, var12 + var15);
+                            BlockState var35 = var4.getBlockState(var13);
+                            int var36 = sliceBlockColor(var35, var35.getMapColor(var4, var13), var0, var34);
+                            if (!var35.getFluidState().isEmpty()) {
+                                if (var35.getFluidState().is(net.minecraft.tags.FluidTags.LAVA)) {
+                                    var36 = lavaColor(mapColorAbgr(var35.getMapColor(var4, var13)));
                                 } else {
-                                    int var36 = 0;
+                                    int var37 = 0;
 
-                                    for (BlockPos var37 = var13.immutable(); var36 < 12 && !var4.getFluidState(var37).isEmpty(); var36++) {
-                                        var37 = var37.below();
+                                    for (BlockPos var38 = var13.immutable(); var37 < 12 && !var4.getFluidState(var38).isEmpty(); var37++) {
+                                        var38 = var38.below();
                                     }
 
-                                    var35 = shadeAbgr(var35, Math.max(0.4F, 1.0F - var36 * 0.08F));
+                                    var36 = shadeAbgr(var36, Math.max(0.4F, 1.0F - var37 * 0.08F));
                                 }
 
                                 // water/lava floors read like the surface map
-                                var10[var16] = shadeAbgr(var35, sliceDepthDim(var33, var5, var6));
+                                var10[var16] = shadeAbgr(var36, sliceDepthDim(var34, var5, var6));
                             } else {
                                 // cave floor: dark by default (the tunnel shape reads
-                                // against bright rock), torch/sky light brightens it
-                                float var38 = 0.35F;
+                                // against bright rock), torch/sky light brightens it -
+                                // but never past 0.72: a fully lit stone floor used to
+                                // reach the very tone of the surrounding rock, so the
+                                // tunnel shape dissolved into the grey around it and
+                                // only the colored (dirt/ore) floors stayed visible as
+                                // random bright rectangles
+                                float var39 = 0.35F;
                                 if (var29) {
-                                    var13.set(var11 + var14, Math.min(var33 + 1, var8 - 1), var12 + var15);
-                                    int var39 = var0.getBrightness(LightLayer.SKY, var13);
-                                    int var40 = var0.getBrightness(LightLayer.BLOCK, var13);
-                                    var38 = Math.max(var38, lightShade(var0, var39, var40));
+                                    var13.set(var11 + var14, Math.min(var34 + 1, var8 - 1), var12 + var15);
+                                    int var40 = var0.getBrightness(LightLayer.SKY, var13);
+                                    int var42 = var0.getBrightness(LightLayer.BLOCK, var13);
+                                    var39 = Math.max(var39, Math.min(0.72F, lightShade(var0, var40, var42)));
                                 }
 
-                                var10[var16] = shadeAbgr(var35, var38 * sliceDepthDim(var33, var5, var6));
+                                var10[var16] = shadeAbgr(var36, var39 * sliceDepthDim(var34, var5, var6));
                             }
                         }
                     }
@@ -846,6 +872,7 @@ public final class MapTileCache {
 
         int var5 = bucketCenterY(var3);
         int var6 = sliceRange() * 2;
+        int var14 = var5 + 7; // band top, aligned with the live slice band scan
         int var11 = rockTone(var0, var5);
         int[] var7 = var4.colors();
         int[] var8 = var4.heights() == null ? defaultHeights() : var4.heights();
@@ -856,12 +883,15 @@ public final class MapTileCache {
             if (var7[var12] != UNKNOWN && var8[var12] != Integer.MIN_VALUE) {
                 int var13 = var8[var12];
                 var10[var12] = var13;
-                if (var13 >= var5) {
-                    // solid at the cut level: unknown rock, same grey as live rock
+                if (var13 >= var14) {
+                    // solid through the whole view band: unknown rock, same grey as live rock
                     var9[var12] = shadeAbgr(var11, 0.9F);
                 } else {
-                    // open cavity down to the stored surface: sky-lit floor
-                    var9[var12] = shadeAbgr(var7[var12], Math.max(0.45F, sliceDepthDim(var13, var5, var6)));
+                    // open inside the band down to the stored surface: cavity floor,
+                    // capped dark exactly like the live slice path - the old 0.45+
+                    // "sky-lit" floors mismatched the live dark floors and showed up
+                    // as random bright rectangles scattered over the stored map
+                    var9[var12] = shadeAbgr(var7[var12], Math.min(0.72F, Math.max(0.4F, sliceDepthDim(var13, var5, var6))));
                 }
             } else {
                 var9[var12] = UNKNOWN;
