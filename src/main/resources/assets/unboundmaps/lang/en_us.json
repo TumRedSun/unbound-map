@@ -44,6 +44,7 @@
   "gui.unboundmaps.set.autoCave": "Auto cave mode",
   "gui.unboundmaps.set.nightDim": "Night dimming",
   "gui.unboundmaps.set.terrain": "Terrain shading",
+  "gui.unboundmaps.set.gradient": "Elevation gradient (dark = low)",
   "gui.unboundmaps.set.biomeColors": "Biome colors",
   "gui.unboundmaps.set.light": "Light shading (torches)",
   "gui.unboundmaps.set.radar": "Entity radar",
@@ -76,7 +77,7 @@
   "gui.unboundmaps.guideTitle3": "Guide: search",
   "gui.unboundmaps.guide3": "• Open the search: Ctrl+F.\n• Plain text - searches your waypoints.\n• way/<name> - waypoints only.\n• block/<block> - blocks in loaded chunks: block/diamond_ore, block/#ores.\n• biome/<biome> - biomes over the WHOLE explored map: biome/desert, biome/#jungle.\n• Enter - run the search and cycle results, Esc - close.\n• Results are highlighted with rings, the current one is white.",
   "gui.unboundmaps.guideTitle4": "Guide: caves and height",
-  "gui.unboundmaps.guide4": "• The slider in the bottom-left corner is the view height. Leftmost position = Auto.\n• In Auto the slice engages automatically while you are underground (disable with 'Auto cave mode') and follows your height.\n• C - pin the slice at your height on the minimap; press again to release.\n• The , and . keys (or the mouse wheel over the slider) move the slice by 8 blocks.\n• In slice mode the map shows the world 'without a roof' - all caves below the chosen height.",
+  "gui.unboundmaps.guide4": "• The slider in the bottom-left corner is the view height. Leftmost position = Auto.\n• In Auto the slice engages automatically while you are underground (disable with 'Auto cave mode') and follows your height.\n• C - pin the slice at your height on the minimap; press again to release.\n• The , and . keys (or the mouse wheel over the slider) move the slice by 8 blocks.\n• In slice mode the map shows the world 'without a roof' - all caves below the chosen height.\n• The elevation gradient colors the terrain by height: dark blue = low, natural = mid, white = high.",
   "gui.unboundmaps.guideTitle5": "Guide: minimap",
   "gui.unboundmaps.guide5": "• Z - enlarge the minimap: the scale stays the same, you just see MORE territory (centered on the screen or in the same corner - see 'Enlarged minimap centered').\n• 'Minimap position' - which corner it lives in.\n• Zoom: the 'Minimap zoom in/out' keys (= and - by default).\n• Map dots are your waypoints; the radar shows nearby entities.\n• Under the map: cave mode, coordinates and biome.",
   "gui.unboundmaps.hint": "Drag: pan | Scroll: zoom | RMB: menu | Double-click: new waypoint | Del: delete marker | B: waypoint list | C: cave mode | Ctrl+F: search | M/Esc: close"

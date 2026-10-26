@@ -107,6 +107,7 @@ public class WorldMapScreen extends Screen {
     private static final int A_DEATHCOLOR = 11;
     private static final int A_OLDDEATHCOLOR = 12;
     private static final int A_RESET = 13;
+    private static final int A_GRADIENT = 14;
 
     /** Current zoom of the world map (blocks per texture pixel), read by the cell cache for its LOD choice. */
     public static double currentBlocksPerPixel() {
@@ -1351,6 +1352,9 @@ public class WorldMapScreen extends Screen {
             I18n.get("gui.unboundmaps.set.terrain"), this.onOff(UnboundConfig.TERRAIN_SHADING.get()), this.boolColor(UnboundConfig.TERRAIN_SHADING.get()), -1, A_TERRAIN
         ));
         var0.add(new WorldMapScreen.SettingsRow(
+            I18n.get("gui.unboundmaps.set.gradient"), this.onOff(UnboundConfig.TERRAIN_GRADIENT.get()), this.boolColor(UnboundConfig.TERRAIN_GRADIENT.get()), -1, A_GRADIENT
+        ));
+        var0.add(new WorldMapScreen.SettingsRow(
             I18n.get("gui.unboundmaps.set.biomeColors"), this.onOff(UnboundConfig.BIOME_SHADING.get()), this.boolColor(UnboundConfig.BIOME_SHADING.get()), -1, A_BIOMECOL
         ));
         var0.add(new WorldMapScreen.SettingsRow(
@@ -1426,6 +1430,10 @@ public class WorldMapScreen extends Screen {
                 break;
             case A_TERRAIN:
                 UnboundConfig.TERRAIN_SHADING.set(!UnboundConfig.TERRAIN_SHADING.get());
+                this.clearBakedTiles();
+                break;
+            case A_GRADIENT:
+                UnboundConfig.TERRAIN_GRADIENT.set(!UnboundConfig.TERRAIN_GRADIENT.get());
                 this.clearBakedTiles();
                 break;
             case A_BIOMECOL:

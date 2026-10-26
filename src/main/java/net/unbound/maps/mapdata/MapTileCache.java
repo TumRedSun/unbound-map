@@ -28,15 +28,21 @@ import net.unbound.maps.UnboundConfig;
 /**
  * Computes and caches the 16x16 color tiles for both the minimap and the world map.
  *
- * Surface tiles: WORLD_SURFACE heightmap + block map color, with optional
- * biome tinting (grass/foliage/water), dynamic light shading (block light from
- * torches/lava/glowstone glows at night, sky light follows the day cycle) and
- * cross-chunk hillshading.
- * Slice (cave) tiles: Xaero-style "cut lid" view at an EXACT height. Everything
- * above the cut plane is treated as removed; the block at the cut renders bright
- * (the cross-section wall), the first non-air block below an open cut (a cave
- * floor, a ravine bottom, lava) is rendered at any depth, lit by the light
- * inside the cavity itself, with 16 perceptual light gradations.
+ * BOTH views share ONE drawing pipeline ({@link #terrainBlockColor}): block map
+ * color + biome tinting (grass/foliage/water) + water depth + lava glow, on top
+ * of the same hillshade and the same elevation gradient.
+ *
+ * Surface tiles: the WORLD_SURFACE block goes through the pipeline, then the
+ * full-strength elevation gradient (dark blue lowlands -> natural midlands ->
+ * warm bright highlands -> white peaks, anchored at sea level) and the
+ * cross-chunk hillshade.
+ * Slice (cave) tiles: Xaero-style "cut lid" view at an EXACT height - everything
+ * above the cut plane is treated as removed (the roof is cut off). The block at
+ * the cut renders as the cross-section wall (slightly lifted, stone family
+ * blended toward the bright rock tone), the first non-air block below an open
+ * cut (a cave floor, a ravine bottom, lava) is rendered at any depth through the
+ * same pipeline, lit by the light inside the cavity itself, with a subtler
+ * elevation gradient so "what is higher" reads inside caves too.
  *
  * Final tiles are recorded in {@link MapStore} so explored-but-unloaded chunks
  * keep rendering from disk.
@@ -206,6 +212,123 @@ public final class MapTileCache {
         int var2 = Math.round((var0 >>> 8 & 0xFF) * 0.55F + 176.0F * 0.45F);
         int var3 = Math.round((var0 >>> 16 & 0xFF) * 0.55F + 64.0F * 0.45F);
         return var0 & 0xFF000000 | clamp255(var3) << 16 | clamp255(var2) << 8 | clamp255(var1);
+    }
+
+    /**
+     * The ONE color pipeline both views share ("the same drawing logic as the
+     * normal mode"): block map color + biome grass/foliage/water tint + water
+     * depth darkening + lava glow. The surface view feeds it the WORLD_SURFACE
+     * block, the cave slice feeds it the cut-plane wall or the cavity floor, so
+     * a cave entrance reads green, a dirt pocket brown and a lava lake glowing
+     * on BOTH maps.
+     */
+    private static int terrainBlockColor(ClientLevel var0, ChunkAccess var1, BlockPos var2, BlockState var3, boolean var4) {
+        MapColor var5 = var3.getMapColor(var1, var2);
+        int var6 = mapColorAbgr(var5);
+        if (var4) {
+            Biome var7 = var0.getBiome(var2).value();
+            if (var5 == MapColor.WATER) {
+                var6 = abgrFromRgb(var7.getWaterColor());
+            } else if (var3.is(BlockTags.LEAVES)) {
+                // Xaero-like readable foliage: tinting the PLANT map
+                // color (zero R/B channels) produced a near-black
+                // (0,90,0) that made every forest look burned. The
+                // GRASS base keeps R/B, the biome foliage tint decides
+                // the hue, and a slight darkening keeps canopies
+                // distinct from the grass floor without going black.
+                var6 = shadeAbgr(tintAbgr(mapColorAbgr(MapColor.GRASS), var7.getFoliageColor()), 0.88F);
+            } else if (var5 == MapColor.GRASS || var5 == MapColor.PLANT) {
+                // Xaero-like uniform grass: plant blocks (short/tall
+                // grass, ferns, crops...) keep the PLANT map color whose
+                // zero R/B channels made tinted pixels a darker, different
+                // green than the grass_block next to them (salt-and-pepper
+                // noise). Rendering them on the GRASS base color makes
+                // plains one smooth, monolithic color.
+                int var8 = var5 == MapColor.PLANT ? mapColorAbgr(MapColor.GRASS) : var6;
+                var6 = tintAbgr(var8, var7.getGrassColor((double)var2.getX(), (double)var2.getZ()));
+            }
+        }
+
+        FluidState var9 = var1.getFluidState(var2);
+        if (!var9.isEmpty()) {
+            if (var9.is(net.minecraft.tags.FluidTags.LAVA)) {
+                // lava emits full light: keep it glowing hot instead of the
+                // water-style depth darkening that made it look dark red
+                return lavaColor(var6);
+            }
+
+            int var10 = 0;
+
+            BlockPos var11;
+            for (var11 = var2.immutable(); var10 < 12 && !var1.getFluidState(var11).isEmpty(); var10++) {
+                var11 = var11.below();
+            }
+
+            var6 = shadeAbgr(var6, Math.max(0.45F, 1.0F - var10 * 0.07F));
+        }
+
+        return var6;
+    }
+
+    /**
+     * Elevation gradient (the readable "what is higher / what is lower" cue):
+     * a hypsometric ramp anchored at sea level. Low ground tints dark and cool
+     * (deep blue), mid ground keeps the natural biome colors, high ground warms
+     * up and fades toward white peaks. The tint is weakest in the middle range,
+     * so biome colors and the slope hillshade stay visible where you navigate.
+     * Stops: {deltaY, r, g, b, alpha} in RGB, interpolated linearly.
+     */
+    private static final float[][] GRADIENT_STOPS = new float[][]{
+        {-64.0F, 30.0F, 62.0F, 108.0F, 0.50F},
+        {-24.0F, 60.0F, 94.0F, 130.0F, 0.34F},
+        {0.0F, 108.0F, 144.0F, 164.0F, 0.16F},
+        {16.0F, 128.0F, 128.0F, 128.0F, 0.0F},
+        {48.0F, 250.0F, 224.0F, 148.0F, 0.15F},
+        {96.0F, 255.0F, 238.0F, 198.0F, 0.30F},
+        {144.0F, 255.0F, 250.0F, 234.0F, 0.44F},
+        {192.0F, 255.0F, 255.0F, 255.0F, 0.58F}
+    };
+
+    /** The anchor Y of the elevation gradient: sea level per dimension. */
+    private static int heightAnchor(ClientLevel var0) {
+        if (var0.dimension() == Level.NETHER) {
+            return 32;
+        }
+
+        return var0.dimension() == Level.END ? 64 : 63;
+    }
+
+    /** Blends the ramp tint over an ABGR map color; strength scales the alpha (1 = surface, 0.6 = slice). */
+    private static int applyHeightGradient(int var0, int var1, int var2, float var3) {
+        float var4 = Mth.clamp((float)(var1 - var2), GRADIENT_STOPS[0][0], GRADIENT_STOPS[GRADIENT_STOPS.length - 1][0]);
+        float[] var5 = GRADIENT_STOPS[0];
+        float[] var6 = GRADIENT_STOPS[GRADIENT_STOPS.length - 1];
+
+        for (int var7 = 1; var7 < GRADIENT_STOPS.length; var7++) {
+            if (var4 <= GRADIENT_STOPS[var7][0]) {
+                var5 = GRADIENT_STOPS[var7 - 1];
+                var6 = GRADIENT_STOPS[var7];
+                break;
+            }
+        }
+
+        float var8 = var6[0] - var5[0];
+        float var9 = var8 <= 0.0F ? 0.0F : (var4 - var5[0]) / var8;
+        float var10 = (var5[4] + (var6[4] - var5[4]) * var9) * var3;
+        if (var10 <= 0.004F) {
+            return var0;
+        }
+
+        int var11 = var0 & 0xFF;
+        int var12 = var0 >>> 8 & 0xFF;
+        int var13 = var0 >>> 16 & 0xFF;
+        float var14 = var5[1] + (var6[1] - var5[1]) * var9;
+        float var15 = var5[2] + (var6[2] - var5[2]) * var9;
+        float var16 = var5[3] + (var6[3] - var5[3]) * var9;
+        int var17 = clamp255(Math.round(var11 + (var14 - var11) * var10));
+        int var18 = clamp255(Math.round(var12 + (var15 - var12) * var10));
+        int var19 = clamp255(Math.round(var13 + (var16 - var13) * var10));
+        return var0 & 0xFF000000 | var19 << 16 | var18 << 8 | var17;
     }
 
     /**
@@ -415,6 +538,7 @@ public final class MapTileCache {
             boolean var29 = flag(UnboundConfig.BIOME_SHADING, true);
             boolean var30 = flag(UnboundConfig.LIGHT_SHADING, true);
             boolean var31 = MapStore.isEnabled();
+            boolean gradOn = flag(UnboundConfig.TERRAIN_GRADIENT, true);
             int[] var32 = new int[256];
             int[] var33 = new int[256];
             int var9 = var1 << 4;
@@ -439,48 +563,14 @@ public final class MapTileCache {
                         if (var17.isAir()) {
                             var32[var15] = -15723752;
                         } else {
-                            MapColor var18 = var17.getMapColor(var6, var12);
-                            int var19 = mapColorAbgr(var18);
-                            net.minecraft.core.Holder<Biome> var20 = var0.getBiome(var12);
-                            if (var29) {
-                                Biome var21 = (Biome)var20.value();
-                                if (var18 == MapColor.WATER) {
-                                    var19 = abgrFromRgb(var21.getWaterColor());
-                                } else if (var17.is(BlockTags.LEAVES)) {
-                                    // Xaero-like readable foliage: tinting the PLANT map
-                                    // color (zero R/B channels) produced a near-black
-                                    // (0,90,0) that made every forest look burned. The
-                                    // GRASS base keeps R/B, the biome foliage tint decides
-                                    // the hue, and a slight darkening keeps canopies
-                                    // distinct from the grass floor without going black.
-                                    var19 = shadeAbgr(tintAbgr(mapColorAbgr(MapColor.GRASS), var21.getFoliageColor()), 0.88F);
-                                } else if (var18 == MapColor.GRASS || var18 == MapColor.PLANT) {
-                                    // Xaero-like uniform grass: plant blocks (short/tall
-                                    // grass, ferns, crops...) keep the PLANT map color whose
-                                    // zero R/B channels made tinted pixels a darker, different
-                                    // green than the grass_block next to them (salt-and-pepper
-                                    // noise). Rendering them on the GRASS base color makes
-                                    // plains one smooth, monolithic color.
-                                    int var22 = var18 == MapColor.PLANT ? mapColorAbgr(MapColor.GRASS) : var19;
-                                    var19 = tintAbgr(var22, var21.getGrassColor((double)var12.getX(), (double)var12.getZ()));
-                                }
-                            }
-
-                            FluidState var22 = var6.getFluidState(var12);
-                            if (!var22.isEmpty()) {
-                                if (var22.is(net.minecraft.tags.FluidTags.LAVA)) {
-                                    // lava emits full light: keep it glowing hot instead of the
-                                    // water-style depth darkening that made it look dark red
-                                    var19 = lavaColor(var19);
-                                } else {
-                                    int var23 = 0;
-
-                                    for (BlockPos var24 = var12.immutable(); var23 < 12 && !var6.getFluidState(var24).isEmpty(); var23++) {
-                                        var24 = var24.below();
-                                    }
-
-                                    var19 = shadeAbgr(var19, Math.max(0.45F, 1.0F - var23 * 0.07F));
-                                }
+                            // ONE shared pipeline with the cave slice (see
+                            // terrainBlockColor): map color + biome tint +
+                            // water depth + lava glow
+                            int var19 = terrainBlockColor(var0, var6, var12, var17, var29);
+                            // elevation gradient on land columns: water already
+                            // darkens with depth, lava must stay vivid
+                            if (gradOn && var17.getFluidState().isEmpty()) {
+                                var19 = applyHeightGradient(var19, var16, heightAnchor(var0), 1.0F);
                             }
 
                             var32[var15] = var19;
@@ -669,6 +759,98 @@ public final class MapTileCache {
         return var5;
     }
 
+    /**
+     * Slice hillshade - the SAME slope math as the surface view, applied to the
+     * cut-lid heights: walls sit at the cut plane, cavity floors at their floor
+     * Y, so every wall/floor boundary and every bit of floor relief gets the
+     * surface-style slope shading and cavities pop out of the rock like they do
+     * on the surface map. Neighbor samples come from the same slice bucket;
+     * unknown neighbors fall back to the own height (re-shaded later, see
+     * {@link #markSliceNeighborsForReshade}), so shading stays cheap and
+     * non-recursive.
+     */
+    private static void shadeSliceChunk(ClientLevel var0, int var1, int var2, int var3, MapTileCache.Entry var4) {
+        if (var4.shaded) {
+            return;
+        }
+
+        boolean var5 = flag(UnboundConfig.TERRAIN_SHADING, true);
+        if (var5) {
+            if (var4.base == null) {
+                var4.base = var4.colors.clone();
+            }
+
+            for (int var9 = 0; var9 < 16; var9++) {
+                for (int var10 = 0; var10 < 16; var10++) {
+                    int var11 = var9 << 4 | var10;
+                    if (var4.base[var11] != -15723752 && var4.heights[var11] != Integer.MIN_VALUE) {
+                        int var12 = var4.heights[var11];
+                        int var13 = sliceNeighborHeight(var0, var1, var2, var10 - 1, var9 - 1, var12, var3, var4);
+                        float var14 = Mth.clamp(1.0F + (float)(var12 - var13) * 0.06F, 0.82F, 1.18F);
+                        int var15 = sliceNeighborHeight(var0, var1, var2, var10 + 1, var9, var12, var3, var4);
+                        int var16 = sliceNeighborHeight(var0, var1, var2, var10, var9 + 1, var12, var3, var4);
+                        if (Math.abs(var12 - var15) >= 4 || Math.abs(var12 - var16) >= 4) {
+                            var14 *= 0.94F;
+                        }
+
+                        if (var14 != 1.0F) {
+                            var4.colors[var11] = shadeAbgr(var4.base[var11], var14);
+                        } else {
+                            var4.colors[var11] = var4.base[var11];
+                        }
+                    } else if (var4.base != null) {
+                        var4.colors[var11] = var4.base[var11];
+                    }
+                }
+            }
+        }
+
+        var4.shaded = true;
+    }
+
+    /** Height of a slice column; (lx, lz) may leave 0..15 by ONE block into the direct neighbor chunk. */
+    private static int sliceNeighborHeight(ClientLevel var0, int var1, int var2, int var3, int var4, int var5, int var6, MapTileCache.Entry var7) {
+        int var8 = Mth.clamp(var3, -1, 16);
+        int var9 = Mth.clamp(var4, -1, 16);
+        if (var8 >= 0 && var8 < 16 && var9 >= 0 && var9 < 16) {
+            int var10 = var7.heights[var9 << 4 | var8];
+            return var10 != Integer.MIN_VALUE ? var10 : var5;
+        }
+
+        Map<Long, MapTileCache.Entry> var11 = SLICES.get(var6);
+        if (var11 != null) {
+            MapTileCache.Entry var12 = var11.get(ChunkPos.asLong(var1 + (var8 >> 4), var2 + (var9 >> 4)));
+            if (var12 != null) {
+                int var13 = var12.heights[(var9 & 15) << 4 | var8 & 15];
+                return var13 != Integer.MIN_VALUE ? var13 : var5;
+            }
+        }
+
+        return var5;
+    }
+
+    /** Re-shades the four direct neighbors IN THE SAME SLICE BUCKET now that this chunk exists. */
+    private static void markSliceNeighborsForReshade(int var0, int var1, int var2) {
+        int[][] var3 = new int[][]{{-1, 0}, {1, 0}, {0, -1}, {0, 1}};
+        Map<Long, MapTileCache.Entry> var4 = SLICES.get(var2);
+        if (var4 == null) {
+            return;
+        }
+
+        for (int[] var8 : var3) {
+            long var9 = ChunkPos.asLong(var0 + var8[0], var1 + var8[1]);
+            MapTileCache.Entry var10 = var4.get(var9);
+            // stored entries keep their approximation colors - re-running the
+            // shade pass on them would darken them a second time
+            if (var10 != null && var10.shaded && !var10.stored && var10.base != null) {
+                var10.shaded = false;
+                System.arraycopy(var10.base, 0, var10.colors, 0, 256);
+                MinimapTexture.markChunkDirty(var9);
+                WorldMapCells.markChunkDirty(var9);
+            }
+        }
+    }
+
     public static int getSliceColor(ClientLevel var0, int var1, int var2, int var3) {
         int var4 = var1 >> 4;
 
@@ -683,9 +865,19 @@ public final class MapTileCache {
             }
 
             storeWithLimit(var8, var6, var9, 8000);
+        } else if (!var9.shaded) {
+            // deferred hillshade: a neighbor was (re-)shaded after this entry
+            // and reset it for one more pass - finish it on the first redraw,
+            // exactly like the surface view does in getColor
+            shadeSliceChunk(var0, var4, var5, var3, var9);
         }
 
-        return enhance(var9.colors[(var5 & 15) << 4 | var1 & 15]);
+        // CRITICAL FIX: the pixel row comes from the LOCAL block Z (var2 & 15).
+        // The old code indexed with the CHUNK Z (var5 & 15), so every pixel of a
+        // chunk read the SAME tile row - the whole cave view smeared into
+        // horizontal streaks while the surface view (getColor) kept its correct
+        // index and rendered fine.
+        return enhance(var9.colors[(var2 & 15) << 4 | var1 & 15]);
     }
 
     public static int sliceTopY(ClientLevel var0, int var1, int var2, int var3) {
@@ -706,19 +898,18 @@ public final class MapTileCache {
             return storedSliceChunk(var0, var1, var2, var3);
         } else {
             boolean var29 = flag(UnboundConfig.LIGHT_SHADING, true);
+            boolean biomeShade = flag(UnboundConfig.BIOME_SHADING, true);
+            boolean gradOn = flag(UnboundConfig.TERRAIN_GRADIENT, true);
             int var5 = bucketCenterY(var3);
             int var6 = sliceRange() * 2;
             int var7 = var0.getMinBuildHeight();
             int var8 = var0.getMaxBuildHeight();
             // Xaero-style single-plane cut at the EXACT view height: everything
-            // above the cut is removed. The old 8-block band scan made one
-            // continuous cavern flicker between bright rock and dark cavity
-            // following its 3D ceiling relief - the cave shattered into "broken
-            // blocks painting whole chunks" (the band was solid where the
-            // ceiling was high and a cavity where it was low). A single plane
-            // renders a clean cross-section: solid-at-cut columns show the cut
-            // block bright (the wall the lid was cut through), air-at-cut
-            // columns show the lit floor below.
+            // above the cut is removed ("the roof is cut off"), and the coloring
+            // is the SAME pipeline as the surface view (terrainBlockColor: map
+            // color + biome tint + water depth + lava glow), so caves read like
+            // the normal map. Solid-at-cut columns show the cross-section wall,
+            // air-at-cut columns show the cavity floor below at any depth.
             int[] var9 = new int[256];
             int[] var10 = new int[256];
             int var11 = var1 << 4;
@@ -732,28 +923,29 @@ public final class MapTileCache {
                     var13.set(var11 + var14, var30, var12 + var15);
                     BlockState var17 = var4.getBlockState(var13);
                     if (!var17.isAir()) {
-                        // solid at the cut: the cross-section wall, rendered at
-                        // the cut block itself, bright (uniform rock tone for
-                        // the stone family - raw deepslate/sculk/tuff map
-                        // colors are near-black and read as holes)
+                        // solid at the cut: the cross-section wall. Real block
+                        // color from the shared pipeline, slightly lifted so the
+                        // cut reads as a wall; the stone family blends toward the
+                        // bright rock tone (raw deepslate/sculk/tuff map colors
+                        // are near-black and would read as holes) while ores
+                        // keep their sparkle.
                         var9[var16] = var30;
-                        MapColor var41 = var17.getMapColor(var4, var13);
-                        int var36 = mapColorAbgr(var41);
-                        if (!var17.getFluidState().isEmpty()) {
-                            if (var17.getFluidState().is(net.minecraft.tags.FluidTags.LAVA)) {
-                                var36 = lavaColor(var36);
-                            } else {
-                                var36 = shadeAbgr(var36, 0.85F);
+                        int var36 = terrainBlockColor(var0, var4, var13, var17, biomeShade);
+                        if (var17.getFluidState().isEmpty()) {
+                            MapColor var41 = var17.getMapColor(var4, var13);
+                            if ((var41 == MapColor.STONE || var41 == MapColor.DEEPSLATE)
+                                && !(var17.getBlock() instanceof DropExperienceBlock)) {
+                                var36 = blendAbgr(var36, rockTone(var0, var30), 0.55F);
                             }
-                        } else {
-                            var36 = sliceBlockColor(var17, var41, var0, var30);
+
+                            var36 = shadeAbgr(var36, 1.10F);
                         }
 
                         var10[var16] = var36;
                     } else {
-                        // air at the cut: open cavity - render the floor below,
-                        // scanning all the way down (ravines, lava lakes and
-                        // galleries far below the cut stay visible)
+                        // air at the cut: the roof is cut away - open cavity.
+                        // Render the floor below (any depth) in its REAL colors,
+                        // lit by the light inside the cavity itself.
                         int var34 = sliceTop(var4, var14, var15, var30, var7, var8);
                         var9[var16] = var34;
                         if (var34 == Integer.MIN_VALUE) {
@@ -761,46 +953,50 @@ public final class MapTileCache {
                         } else {
                             var13.set(var11 + var14, var34, var12 + var15);
                             BlockState var35 = var4.getBlockState(var13);
-                            int var36 = sliceBlockColor(var35, var35.getMapColor(var4, var13), var0, var34);
+                            int var36 = terrainBlockColor(var0, var4, var13, var35, biomeShade);
+                            float var37;
                             if (!var35.getFluidState().isEmpty()) {
-                                if (var35.getFluidState().is(net.minecraft.tags.FluidTags.LAVA)) {
-                                    var36 = lavaColor(mapColorAbgr(var35.getMapColor(var4, var13)));
-                                } else {
-                                    int var37 = 0;
-
-                                    for (BlockPos var38 = var13.immutable(); var37 < 12 && !var4.getFluidState(var38).isEmpty(); var37++) {
-                                        var38 = var38.below();
-                                    }
-
-                                    var36 = shadeAbgr(var36, Math.max(0.4F, 1.0F - var37 * 0.08F));
-                                }
-
-                                // water/lava floors read like the surface map
-                                var10[var16] = shadeAbgr(var36, sliceDepthDim(var34, var5, var6));
+                                // water/lava floors read like the surface map (the
+                                // pipeline already applied lava glow / water depth)
+                                var37 = sliceDepthDim(var34, var5, var6);
                             } else {
-                                // cave floor: dark by default (the tunnel shape reads
-                                // against bright rock), torch/sky light brightens it -
-                                // but never past 0.72: a fully lit stone floor used to
-                                // reach the very tone of the surrounding rock, so the
-                                // tunnel shape dissolved into the grey around it and
-                                // only the colored (dirt/ore) floors stayed visible as
-                                // random bright rectangles
-                                float var39 = 0.35F;
+                                // cave floor: readable mid-dark by default (the
+                                // tunnel shape reads against the lifted walls),
+                                // torch/sky light brightens it - capped below the
+                                // wall tone so fully lit floors never dissolve
+                                // into the surrounding rock
+                                float var39 = 0.5F;
                                 if (var29) {
                                     var13.set(var11 + var14, Math.min(var34 + 1, var8 - 1), var12 + var15);
                                     int var40 = var0.getBrightness(LightLayer.SKY, var13);
                                     int var42 = var0.getBrightness(LightLayer.BLOCK, var13);
-                                    var39 = Math.max(var39, Math.min(0.72F, lightShade(var0, var40, var42)));
+                                    var39 = Math.max(var39, Math.min(0.9F, lightShade(var0, var40, var42)));
                                 }
 
-                                var10[var16] = shadeAbgr(var36, var39 * sliceDepthDim(var34, var5, var6));
+                                var37 = var39 * sliceDepthDim(var34, var5, var6);
                             }
+
+                            var36 = shadeAbgr(var36, var37);
+                            // subtle ABSOLUTE height cue inside the cave (half
+                            // strength): a floor at Y=20 and a floor at Y=50 keep
+                            // different tones even inside one view
+                            if (gradOn && var35.getFluidState().isEmpty()) {
+                                var36 = applyHeightGradient(var36, var34, heightAnchor(var0), 0.6F);
+                            }
+
+                            var10[var16] = var36;
                         }
                     }
                 }
             }
 
-            return new MapTileCache.Entry(var10, var9, true, false);
+            MapTileCache.Entry var44 = new MapTileCache.Entry(var10, var9, false, false);
+            shadeSliceChunk(var0, var1, var2, var3, var44);
+            // the neighbors may have been shaded while this chunk did not exist
+            // yet (their border columns fell back to their own height) - re-shade
+            // them once so the slice shading continues smoothly across the border
+            markSliceNeighborsForReshade(var1, var2, var3);
+            return var44;
         }
     }
 
@@ -809,25 +1005,12 @@ public final class MapTileCache {
         return 1.0F - Math.min((float)Math.abs(var0 - var1) / (float)Math.max(1, var2), 1.0F) * 0.22F;
     }
 
-    /**
-     * Cut-lid rock classification: stone-family blocks (stone, deepslate, tuff,
-     * gravel - everything with the stone/deepslate map color) render as ONE
-     * uniform, bright tone per depth class, so tunnels and galleries read as
-     * clean dark shapes against solid ground. Ores keep their sparkle, fluids
-     * and everything else (dirt patches, moss, sculk) keep their identity. The
-     * raw map colors made every underground block a different shade of dark
-     * grey - the "cave mode is an unreadable mess" report in a nutshell.
-     */
-    private static int sliceBlockColor(BlockState var0, MapColor var1, ClientLevel var2, int var3) {
-        if (var1 != MapColor.STONE && var1 != MapColor.DEEPSLATE) {
-            return mapColorAbgr(var1);
-        }
-
-        if (var0.getBlock() instanceof DropExperienceBlock) {
-            return mapColorAbgr(var1);
-        }
-
-        return rockTone(var2, var3);
+    /** Linear blend of two ABGR colors; t = 0 returns a, t = 1 returns b. */
+    private static int blendAbgr(int var0, int var1, float var2) {
+        int var3 = clamp255(Math.round((float)(var0 & 0xFF) + ((float)(var1 & 0xFF) - (float)(var0 & 0xFF)) * var2));
+        int var4 = clamp255(Math.round((float)(var0 >>> 8 & 0xFF) + ((float)(var1 >>> 8 & 0xFF) - (float)(var0 >>> 8 & 0xFF)) * var2));
+        int var5 = clamp255(Math.round((float)(var0 >>> 16 & 0xFF) + ((float)(var1 >>> 16 & 0xFF) - (float)(var0 >>> 16 & 0xFF)) * var2));
+        return var0 & 0xFF000000 | var5 << 16 | var4 << 8 | var3;
     }
 
     /** Uniform bright rock tone per dimension/depth class (ABGR). */
@@ -872,6 +1055,9 @@ public final class MapTileCache {
         int[] var9 = new int[256];
         int[] var10 = new int[256];
 
+        boolean gradOn = flag(UnboundConfig.TERRAIN_GRADIENT, true);
+        int anchor = heightAnchor(var0);
+
         for (int var12 = 0; var12 < 256; var12++) {
             if (var7[var12] != UNKNOWN && var8[var12] != Integer.MIN_VALUE) {
                 int var13 = var8[var12];
@@ -880,11 +1066,18 @@ public final class MapTileCache {
                     // terrain reaches the cut plane: solid at the cut, same grey as live rock
                     var9[var12] = shadeAbgr(var11, 0.9F);
                 } else {
-                    // open at the cut down to the stored surface: cavity floor,
-                    // capped dark exactly like the live slice path - the old 0.45+
-                    // "sky-lit" floors mismatched the live dark floors and showed up
-                    // as random bright rectangles scattered over the stored map
-                    var9[var12] = shadeAbgr(var7[var12], Math.min(0.72F, Math.max(0.4F, sliceDepthDim(var13, var5, var6))));
+                    // open at the cut down to the stored surface: cavity floor.
+                    // The store keeps the SURFACE colors (no per-block data), so
+                    // this stays an approximation - it is dimmed like an unlit
+                    // live floor (0.55 base x depth fade) so stored and live
+                    // cavities keep the same readable darkness, and the same
+                    // subtle elevation gradient is applied on top.
+                    int var14 = shadeAbgr(var7[var12], 0.55F * sliceDepthDim(var13, var5, var6));
+                    if (gradOn) {
+                        var14 = applyHeightGradient(var14, var13, anchor, 0.6F);
+                    }
+
+                    var9[var12] = var14;
                 }
             } else {
                 var9[var12] = UNKNOWN;

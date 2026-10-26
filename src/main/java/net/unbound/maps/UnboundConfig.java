@@ -28,6 +28,7 @@ public final class UnboundConfig {
     public static final IntValue CAVE_RANGE;
     public static final BooleanValue AUTO_CAVE_MODE;
     public static final BooleanValue TERRAIN_SHADING;
+    public static final BooleanValue TERRAIN_GRADIENT;
     public static final BooleanValue BIOME_SHADING;
     public static final BooleanValue LIGHT_SHADING;
     public static final IntValue NIGHT_DIM_STRENGTH;
@@ -130,6 +131,14 @@ public final class UnboundConfig {
                 " computed across chunk borders)."
             )
             .define("terrainDepth", true);
+        TERRAIN_GRADIENT = var0.comment(
+                "Elevation gradient: a height tint over the terrain so the",
+                " relative height reads at a glance - low ground is dark and",
+                " cool (deep blue), mid ground keeps the natural biome colors,",
+                " high ground warms up and fades toward white peaks. Applied",
+                " on the surface view and, subtler, on cave slice floors."
+            )
+            .define("terrainGradient", true);
         BIOME_SHADING = var0.comment(
                 "Biome shading: grass and foliage get their biome color,",
                 " water gets the biome water color (swamp, jungle, badlands...)."
